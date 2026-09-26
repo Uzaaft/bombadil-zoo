@@ -1,0 +1,97 @@
+From 76e16a9fbbf1182ee90cafcf52f27881f993c3b6 Mon Sep 17 00:00:00 2001
+From: Uzair Aftab <git@uzaaft.me>
+Date: Sat, 26 Sep 2026 15:55:44 +0200
+Subject: [PATCH] fix(ui): guard tree collapse toggle against a nil root
+
+Pressing "x" (Expand/Collapse All) in the Xray view before its tree
+was populated crashed k9s with a nil pointer dereference. Xray builds
+the root node asynchronously, so right after ":xray deploy" GetRoot()
+can return nil, and toggleCollapseCmd called Walk on it
+unconditionally. The panic was recovered in cmd/root.go, which printed
+"Boom!!" and exited.
+
+toggleCollapseCmd now returns early when there is no root, after still
+flipping expandNodes. Xray reads ExpandNodes() when it builds the
+tree, so the requested state is applied once the tree arrives instead
+of being dropped.
+
+TestTreeToggleCollapse covers both an empty and a populated tree.
+---
+ internal/ui/tree.go      |  7 +++++-
+ internal/ui/tree_test.go | 46 ++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 52 insertions(+), 1 deletion(-)
+ create mode 100644 internal/ui/tree_test.go
+
+diff --git a/internal/ui/tree.go b/internal/ui/tree.go
+index fd339cd4..8772e554 100644
+--- a/internal/ui/tree.go
++++ b/internal/ui/tree.go
+@@ -111,7 +111,12 @@ func (*Tree) noopCmd(evt *tcell.EventKey) *tcell.EventKey {
+ 
+ func (t *Tree) toggleCollapseCmd(*tcell.EventKey) *tcell.EventKey {
+ 	t.expandNodes = !t.expandNodes
+-	t.GetRoot().Walk(func(node, parent *tview.TreeNode) bool {
++	// The root is populated asynchronously and may not be set yet.
++	root := t.GetRoot()
++	if root == nil {
++		return nil
++	}
++	root.Walk(func(node, parent *tview.TreeNode) bool {
+ 		if parent != nil {
+ 			node.SetExpanded(t.expandNodes)
+ 		}
+diff --git a/internal/ui/tree_test.go b/internal/ui/tree_test.go
+new file mode 100644
+index 00000000..7cb123e5
+--- /dev/null
++++ b/internal/ui/tree_test.go
+@@ -0,0 +1,46 @@
++// SPDX-License-Identifier: Apache-2.0
++// Copyright Authors of K9s
++
++package ui_test
++
++import (
++	"testing"
++
++	"github.com/derailed/k9s/internal/ui"
++	"github.com/derailed/tcell/v2"
++	"github.com/derailed/tview"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++func TestTreeToggleCollapse(t *testing.T) {
++	uu := map[string]struct {
++		root *tview.TreeNode
++	}{
++		"no-root": {},
++		"root": {
++			root: tview.NewTreeNode("root").AddChild(tview.NewTreeNode("child")),
++		},
++	}
++
++	for k := range uu {
++		u := uu[k]
++		t.Run(k, func(t *testing.T) {
++			v := ui.NewTree()
++			v.BindKeys()
++			if u.root != nil {
++				v.SetRoot(u.root)
++			}
++			a, ok := v.Actions().Get(ui.KeyX)
++			require.True(t, ok)
++
++			assert.NotPanics(t, func() {
++				a.Action(tcell.NewEventKey(tcell.KeyRune, 'x', tcell.ModNone))
++			})
++			assert.False(t, v.ExpandNodes())
++			if u.root != nil {
++				assert.False(t, u.root.GetChildren()[0].IsExpanded())
++			}
++		})
++	}
++}
+-- 
+2.54.0
+

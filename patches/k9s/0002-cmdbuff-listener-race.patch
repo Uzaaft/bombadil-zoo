@@ -1,0 +1,134 @@
+From 8f888029ee3eafb5ad89772f41f6ad4e51f9ceff Mon Sep 17 00:00:00 2001
+From: Uzair Aftab <git@uzaaft.me>
+Date: Sat, 26 Sep 2026 16:08:45 +0200
+Subject: [PATCH] fix(model): snapshot cmd buffer listeners before notifying
+
+CmdBuff notified its listeners by ranging over the listeners map
+without holding the mutex. Add and Delete also fire BufferCompleted
+from a timer goroutine after the key entry delay, so a view that
+registered or unregistered a listener at the same moment, e.g. while
+navigating into Xray, crashed k9s with "fatal error: concurrent map
+iteration and map write". That is a runtime fatal, not a panic, so it
+bypasses the recover in cmd/root.go.
+
+The fire helpers now copy the listeners under a read lock and notify
+the copy with no lock held, since listeners may call back into the
+buffer to add or remove themselves. SetActive also passes along the
+value it was given instead of re-reading c.active after unlocking.
+
+TestCmdBuffConcurrentListeners adds and removes listeners on one
+goroutine while firing events on another. It fails under -race
+without this change.
+---
+ internal/model/cmd_buff.go      | 24 +++++++++++++++++++-----
+ internal/model/cmd_buff_test.go | 31 +++++++++++++++++++++++++++++++
+ 2 files changed, 50 insertions(+), 5 deletions(-)
+
+diff --git a/internal/model/cmd_buff.go b/internal/model/cmd_buff.go
+index 07fe6545..54faa9a8 100644
+--- a/internal/model/cmd_buff.go
++++ b/internal/model/cmd_buff.go
+@@ -5,6 +5,8 @@ package model
+ 
+ import (
+ 	"context"
++	"maps"
++	"slices"
+ 	"sync"
+ 	"time"
+ )
+@@ -85,7 +87,7 @@ func (c *CmdBuff) SetActive(b bool) {
+ 	c.active = b
+ 	c.mx.Unlock()
+ 
+-	c.fireActive(c.active)
++	c.fireActive(b)
+ }
+ 
+ // GetText returns the current text.
+@@ -226,20 +228,32 @@ func (c *CmdBuff) RemoveListener(l BuffWatcher) {
+ 	c.mx.Unlock()
+ }
+ 
++// snapshotListeners returns a copy of the current listeners. Events fire
++// from the key entry timer goroutine as well as the UI goroutine, so the
++// map can't be ranged over directly, and the lock can't be held while
++// notifying since listeners may register or unregister in response.
++func (c *CmdBuff) snapshotListeners() []BuffWatcher {
++	c.mx.RLock()
++	defer c.mx.RUnlock()
++
++	return slices.Collect(maps.Keys(c.listeners))
++}
++
+ func (c *CmdBuff) fireBufferCompleted(t, s string) {
+-	for l := range c.listeners {
++	for _, l := range c.snapshotListeners() {
+ 		l.BufferCompleted(t, s)
+ 	}
+ }
+ 
+ func (c *CmdBuff) fireBufferChanged(t, s string) {
+-	for l := range c.listeners {
++	for _, l := range c.snapshotListeners() {
+ 		l.BufferChanged(t, s)
+ 	}
+ }
+ 
+ func (c *CmdBuff) fireActive(b bool) {
+-	for l := range c.listeners {
+-		l.BufferActive(b, c.GetKind())
++	kind := c.GetKind()
++	for _, l := range c.snapshotListeners() {
++		l.BufferActive(b, kind)
+ 	}
+ }
+diff --git a/internal/model/cmd_buff_test.go b/internal/model/cmd_buff_test.go
+index 00606425..5783666b 100644
+--- a/internal/model/cmd_buff_test.go
++++ b/internal/model/cmd_buff_test.go
+@@ -4,6 +4,7 @@
+ package model_test
+ 
+ import (
++	"sync"
+ 	"testing"
+ 
+ 	"github.com/derailed/k9s/internal/model"
+@@ -147,3 +148,33 @@ func TestCmdBuffEmpty(t *testing.T) {
+ 		b.Reset()
+ 	}
+ }
++
++type noopListener struct{}
++
++func (*noopListener) BufferChanged(string, string)        {}
++func (*noopListener) BufferCompleted(string, string)      {}
++func (*noopListener) BufferActive(bool, model.BufferKind) {}
++
++func TestCmdBuffConcurrentListeners(_ *testing.T) {
++	b := model.NewCmdBuff('>', model.CommandBuffer)
++	b.AddListener(&noopListener{})
++
++	var wg sync.WaitGroup
++	wg.Add(2)
++	go func() {
++		defer wg.Done()
++		for range 1_000 {
++			l := &noopListener{}
++			b.AddListener(l)
++			b.RemoveListener(l)
++		}
++	}()
++	go func() {
++		defer wg.Done()
++		for range 1_000 {
++			b.SetText("a", "", true)
++			b.SetActive(true)
++		}
++	}()
++	wg.Wait()
++}
+-- 
+2.54.0
+

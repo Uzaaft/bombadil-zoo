@@ -26,26 +26,46 @@
         f:
         nixpkgs.lib.genAttrs systems (
           system:
-          f {
+          let
             pkgs = nixpkgs.legacyPackages.${system};
+          in
+          f {
+            inherit pkgs;
             bombadil = bombadil.packages.${system};
+            # k9s with our fixes that are still pending upstream, so fuzzing
+            # doesn't keep rediscovering the same crashes.
+            k9s = pkgs.k9s.overrideAttrs (old: {
+              patches = (old.patches or [ ]) ++ [
+                ./patches/k9s/0001-xray-toggle-nil-root.patch
+                ./patches/k9s/0002-cmdbuff-listener-race.patch
+              ];
+            });
           }
         );
     in
     {
       packages = forAllSystems (
-        { pkgs, bombadil }:
+        {
+          pkgs,
+          bombadil,
+          k9s,
+        }:
         {
           bombadil = bombadil.default;
           # Type definitions / runtime for `@antithesishq/bombadil/terminal` specs.
           bombadil-npm = bombadil.npm-package;
-          k9s = pkgs.k9s;
+          inherit k9s;
+          k9s-upstream = pkgs.k9s;
           default = bombadil.default;
         }
       );
 
       apps = forAllSystems (
-        { pkgs, bombadil }:
+        {
+          pkgs,
+          bombadil,
+          k9s,
+        }:
         let
           fuzz = pkgs.writeShellApplication {
             name = "fuzz";
@@ -76,7 +96,7 @@
                 --specification "$root/spec.ts" \
                 --output-path "$run" \
                 "$@" \
-                -- ${pkgs.k9s}/bin/k9s --readonly --logFile "$run/k9s.log"
+                -- ${k9s}/bin/k9s --readonly --logFile "$run/k9s.log"
             '';
           };
         in
@@ -93,7 +113,11 @@
       );
 
       devShells = forAllSystems (
-        { pkgs, bombadil }:
+        {
+          pkgs,
+          bombadil,
+          k9s,
+        }:
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
