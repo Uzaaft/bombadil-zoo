@@ -29,6 +29,8 @@ const screen = extract((state) => {
   return rows.join("\n");
 });
 
+const exited = extract((state) => state.exitStatus !== null);
+
 // Properties
 
 // k9s recovers panics in cmd/root.go, prints "Boom!!" and exits 0, so
@@ -37,9 +39,13 @@ export const noPanic = always(
   () => !/Boom!!|panic: |goroutine \d+ \[/.test(screen.current ?? ""),
 );
 
-// The screen may blank during a redraw, but never stays blank.
+// The screen may blank during a redraw, but never stays blank while k9s is
+// running. Quitting is legitimate (e.g. selecting "quit" in the aliases
+// view), and the screen is empty after that.
 export const neverStuckBlank = always(
-  eventually(() => (screen.current ?? "").trim() !== "").within(5, "seconds"),
+  eventually(
+    () => !!exited.current || (screen.current ?? "").trim() !== "",
+  ).within(5, "seconds"),
 );
 
 // Actions
