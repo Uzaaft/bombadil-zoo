@@ -1,0 +1,131 @@
+From 2468ceecff4573a8f4d949b706475fa4b1ed43b7 Mon Sep 17 00:00:00 2001
+From: Uzair Aftab <git@uzaaft.me>
+Date: Mon, 12 Oct 2026 12:21:25 +0200
+Subject: [PATCH] fix(xray): skip filtering until the tree has loaded
+
+Typing a filter in the Xray view right after opening it could crash
+k9s with a nil pointer dereference in TreeNode.Flatten. The command
+buffer fires BufferCompleted from its key entry timer goroutine, and
+Xray filtered model.Peek() without checking it. Peek returns nil
+until the first tree load finishes. The panic happened outside the UI
+goroutine, so the recover in cmd/root.go didn't catch it, and k9s
+exited with status 2.
+
+BufferCompleted now returns early when there is no root yet. The
+filter is still applied once the tree loads, since the model filters
+on every refresh.
+
+TestXrayBufferCompletedBeforeTreeLoaded completes a filter on an Xray
+view with no tree, and fails without this change.
+---
+ internal/view/xray.go               |  7 +++-
+ internal/view/xray_int_test.go      | 12 +++++++
+ internal/view/xray_int_test.go.orig | 51 +++++++++++++++++++++++++++++
+ 3 files changed, 69 insertions(+), 1 deletion(-)
+ create mode 100644 internal/view/xray_int_test.go.orig
+
+diff --git a/internal/view/xray.go b/internal/view/xray.go
+index 51621cc..413cc9e 100644
+--- a/internal/view/xray.go
++++ b/internal/view/xray.go
+@@ -631,7 +631,12 @@ func (*Xray) Refresh() {}
+ 
+ // BufferCompleted indicates the buffer was changed.
+ func (x *Xray) BufferCompleted(_, _ string) {
+-	x.update(x.filter(x.model.Peek()))
++	// The root is populated asynchronously and may not be set yet.
++	root := x.model.Peek()
++	if root == nil {
++		return
++	}
++	x.update(x.filter(root))
+ }
+ 
+ // BufferChanged indicates the buffer was changed.
+diff --git a/internal/view/xray_int_test.go b/internal/view/xray_int_test.go
+index 428cd41..4a9486b 100644
+--- a/internal/view/xray_int_test.go
++++ b/internal/view/xray_int_test.go
+@@ -7,6 +7,7 @@ import (
+ 	"testing"
+ 
+ 	"github.com/derailed/k9s/internal/client"
++	"github.com/derailed/k9s/internal/config/mock"
+ 	"github.com/stretchr/testify/assert"
+ )
+ 
+@@ -49,3 +50,14 @@ func TestXrayRxFilterInvalidRegexp(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestXrayBufferCompletedBeforeTreeLoaded(t *testing.T) {
++	v, ok := NewXray(client.NewGVR("deployments")).(*Xray)
++	assert.True(t, ok)
++	v.app = NewApp(mock.NewMockConfig(t))
++	v.CmdBuff().SetText("fred", "", true)
++
++	assert.NotPanics(t, func() {
++		v.BufferCompleted("fred", "")
++	})
++}
+diff --git a/internal/view/xray_int_test.go.orig b/internal/view/xray_int_test.go.orig
+new file mode 100644
+index 0000000..428cd41
+--- /dev/null
++++ b/internal/view/xray_int_test.go.orig
+@@ -0,0 +1,51 @@
++// SPDX-License-Identifier: Apache-2.0
++// Copyright Authors of K9s
++
++package view
++
++import (
++	"testing"
++
++	"github.com/derailed/k9s/internal/client"
++	"github.com/stretchr/testify/assert"
++)
++
++func TestXrayGotoCmdBeforeTreeLoaded(t *testing.T) {
++	v, ok := NewXray(client.NewGVR("deployments")).(*Xray)
++	assert.True(t, ok)
++	v.CmdBuff().SetActive(true)
++
++	assert.NotPanics(t, func() {
++		v.gotoCmd(nil)
++	})
++	assert.False(t, v.CmdBuff().IsActive())
++}
++
++func TestXrayRxFilterInvalidRegexp(t *testing.T) {
++	uu := map[string]struct {
++		q, path string
++		filter  func(q, path string) bool
++		e       bool
++	}{
++		"match": {
++			q: "fred", path: "default/fred", filter: rxFilter, e: true,
++		},
++		"invalid": {
++			q: "+:xray deploy", path: "default/fred", filter: rxFilter,
++		},
++		"inverse-match": {
++			q: "!fred", path: "default/blee", filter: rxInverseFilter, e: true,
++		},
++		"inverse-invalid": {
++			q: "!?:cm", path: "default/blee", filter: rxInverseFilter,
++		},
++	}
++
++	for k, u := range uu {
++		t.Run(k, func(t *testing.T) {
++			assert.NotPanics(t, func() {
++				assert.Equal(t, u.e, u.filter(u.q, u.path))
++			})
++		})
++	}
++}
+-- 
+2.54.0
+

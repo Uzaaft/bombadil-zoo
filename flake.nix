@@ -51,6 +51,8 @@
                 ./patches/k9s/0002-cmdbuff-listener-race.patch
                 ./patches/k9s/0003-table-no-api-version.patch
                 ./patches/k9s/0004-xray-invalid-filter-rx.patch
+                ./patches/k9s/0005-suggest-alias-race.patch
+                ./patches/k9s/0006-xray-filter-before-load.patch
               ];
               # Build against the patched tview. A directory replace doesn't
               # change the module set, so vendorHash stays the same.

@@ -1,0 +1,110 @@
+From d6def939bd03b4a96174368afefae3a5fa6d959d Mon Sep 17 00:00:00 2001
+From: Uzair Aftab <git@uzaaft.me>
+Date: Mon, 12 Oct 2026 12:20:04 +0200
+Subject: [PATCH] fix(view): read aliases under lock when suggesting commands
+
+Typing in the command prompt could crash k9s with "fatal error:
+concurrent map iteration and map write". suggestCommand ranged over
+the alias map directly, skipping the mutex that guards every other
+access to Aliases, so a concurrent alias update, e.g. while CRD aliases
+load, broke the iteration. A fatal error can't be recovered, so k9s
+exited immediately.
+
+Aliases gains a Keys method that copies the alias names under the read
+lock, and suggestCommand iterates that copy.
+
+TestAliasesKeysConcurrent reads Keys while another goroutine defines
+aliases, and runs clean under -race.
+---
+ internal/config/alias.go      | 10 ++++++++++
+ internal/config/alias_test.go | 19 +++++++++++++++++++
+ internal/view/app.go          |  3 +--
+ 3 files changed, 30 insertions(+), 2 deletions(-)
+
+diff --git a/internal/config/alias.go b/internal/config/alias.go
+index 372dd51d..1170a3eb 100644
+--- a/internal/config/alias.go
++++ b/internal/config/alias.go
+@@ -7,7 +7,9 @@ import (
+ 	"errors"
+ 	"io/fs"
+ 	"log/slog"
++	"maps"
+ 	"os"
++	"slices"
+ 	"strings"
+ 	"sync"
+ 
+@@ -72,6 +74,14 @@ func (a *Aliases) ShortNames() ShortNames {
+ 	return m
+ }
+ 
++// Keys returns all alias names.
++func (a *Aliases) Keys() []string {
++	a.mx.RLock()
++	defer a.mx.RUnlock()
++
++	return slices.Collect(maps.Keys(a.Alias))
++}
++
+ // Clear remove all aliases.
+ func (a *Aliases) Clear() {
+ 	a.mx.Lock()
+diff --git a/internal/config/alias_test.go b/internal/config/alias_test.go
+index afdeddca..d92e5904 100644
+--- a/internal/config/alias_test.go
++++ b/internal/config/alias_test.go
+@@ -4,6 +4,7 @@
+ package config_test
+ 
+ import (
++	"fmt"
+ 	"maps"
+ 	"os"
+ 	"path"
+@@ -288,3 +289,21 @@ func testAliases() *config.Aliases {
+ 
+ 	return a
+ }
++
++func TestAliasesKeysConcurrent(t *testing.T) {
++	a := config.NewAliases()
++	a.Define(client.PodGVR, "po")
++
++	done := make(chan struct{})
++	go func() {
++		defer close(done)
++		for i := range 1_000 {
++			a.Define(client.PodGVR, fmt.Sprintf("po%d", i))
++		}
++	}()
++	for range 1_000 {
++		assert.Contains(t, a.Keys(), "po")
++	}
++	<-done
++	assert.Len(t, a.Keys(), 1_001)
++}
+diff --git a/internal/view/app.go b/internal/view/app.go
+index fdfc7ab8..52327844 100644
+--- a/internal/view/app.go
++++ b/internal/view/app.go
+@@ -7,7 +7,6 @@ import (
+ 	"context"
+ 	"fmt"
+ 	"log/slog"
+-	"maps"
+ 	"os"
+ 	"os/signal"
+ 	"sort"
+@@ -207,7 +206,7 @@ func (a *App) suggestCommand() model.SuggestionFunc {
+ 		}
+ 
+ 		ls := strings.ToLower(s)
+-		for alias := range maps.Keys(a.command.alias.Alias) {
++		for _, alias := range a.command.alias.Keys() {
+ 			if suggest, ok := cmd.ShouldAddSuggest(ls, alias); ok {
+ 				entries = append(entries, suggest)
+ 			}
+-- 
+2.54.0
+
