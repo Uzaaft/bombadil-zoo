@@ -1,26 +1,17 @@
-From 76e16a9fbbf1182ee90cafcf52f27881f993c3b6 Mon Sep 17 00:00:00 2001
-From: Uzair Aftab <git@uzaaft.me>
-Date: Sat, 26 Sep 2026 15:55:44 +0200
+From 8f29fba8c97d70008617ed63032f2ef508602c99 Mon Sep 17 00:00:00 2001
+From: Uzair Aftab <uzaaft@outlook.com>
+Date: Sun, 11 Oct 2026 21:50:45 +0200
 Subject: [PATCH] fix(ui): guard tree collapse toggle against a nil root
+ (#4257)
 
-Pressing "x" (Expand/Collapse All) in the Xray view before its tree
-was populated crashed k9s with a nil pointer dereference. Xray builds
-the root node asynchronously, so right after ":xray deploy" GetRoot()
-can return nil, and toggleCollapseCmd called Walk on it
-unconditionally. The panic was recovered in cmd/root.go, which printed
-"Boom!!" and exited.
-
-toggleCollapseCmd now returns early when there is no root, after still
-flipping expandNodes. Xray reads ExpandNodes() when it builds the
-tree, so the requested state is applied once the tree arrives instead
-of being dropped.
-
-TestTreeToggleCollapse covers both an empty and a populated tree.
 ---
- internal/ui/tree.go      |  7 +++++-
- internal/ui/tree_test.go | 46 ++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 52 insertions(+), 1 deletion(-)
+ internal/ui/tree.go            |  7 +++++-
+ internal/ui/tree_test.go       | 46 ++++++++++++++++++++++++++++++++++
+ internal/view/xray.go          |  7 +++++-
+ internal/view/xray_int_test.go | 22 ++++++++++++++++
+ 4 files changed, 80 insertions(+), 2 deletions(-)
  create mode 100644 internal/ui/tree_test.go
+ create mode 100644 internal/view/xray_int_test.go
 
 diff --git a/internal/ui/tree.go b/internal/ui/tree.go
 index fd339cd4..8772e554 100644
@@ -91,6 +82,52 @@ index 00000000..7cb123e5
 +			}
 +		})
 +	}
++}
+diff --git a/internal/view/xray.go b/internal/view/xray.go
+index 094f09f2..8bcf6e45 100644
+--- a/internal/view/xray.go
++++ b/internal/view/xray.go
+@@ -510,7 +510,12 @@ func (x *Xray) gotoCmd(*tcell.EventKey) *tcell.EventKey {
+ 			x.Start()
+ 		}
+ 		x.CmdBuff().SetActive(false)
+-		x.GetRoot().ExpandAll()
++		// The root is populated asynchronously and may not be set yet.
++		root := x.GetRoot()
++		if root == nil {
++			return nil
++		}
++		root.ExpandAll()
+ 
+ 		return nil
+ 	}
+diff --git a/internal/view/xray_int_test.go b/internal/view/xray_int_test.go
+new file mode 100644
+index 00000000..df27615e
+--- /dev/null
++++ b/internal/view/xray_int_test.go
+@@ -0,0 +1,22 @@
++// SPDX-License-Identifier: Apache-2.0
++// Copyright Authors of K9s
++
++package view
++
++import (
++	"testing"
++
++	"github.com/derailed/k9s/internal/client"
++	"github.com/stretchr/testify/assert"
++)
++
++func TestXrayGotoCmdBeforeTreeLoaded(t *testing.T) {
++	v, ok := NewXray(client.NewGVR("deployments")).(*Xray)
++	assert.True(t, ok)
++	v.CmdBuff().SetActive(true)
++
++	assert.NotPanics(t, func() {
++		v.gotoCmd(nil)
++	})
++	assert.False(t, v.CmdBuff().IsActive())
 +}
 -- 
 2.54.0

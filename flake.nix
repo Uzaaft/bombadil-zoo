@@ -28,17 +28,35 @@
           system:
           let
             pkgs = nixpkgs.legacyPackages.${system};
+            # The tview version k9s 0.51.0 requires, with our fixes applied.
+            tview = pkgs.applyPatches {
+              name = "tview-patched";
+              src = pkgs.fetchFromGitHub {
+                owner = "derailed";
+                repo = "tview";
+                rev = "v0.8.5";
+                hash = "sha256-16a/WQSfDWk7TdVyayu2GTIJ4S+ORtKqCNtk5JXMwUQ=";
+              };
+              patches = [ ./patches/tview/0001-textview-wrap-display-width.patch ];
+            };
           in
           f {
             inherit pkgs;
             bombadil = bombadil.packages.${system};
-            # k9s with our fixes that are still pending upstream, so fuzzing
+            # k9s with our fixes that are pending upstream or unreleased, so fuzzing
             # doesn't keep rediscovering the same crashes.
             k9s = pkgs.k9s.overrideAttrs (old: {
               patches = (old.patches or [ ]) ++ [
-                ./patches/k9s/0001-xray-toggle-nil-root.patch
+                ./patches/k9s/0001-xray-nil-root.patch
                 ./patches/k9s/0002-cmdbuff-listener-race.patch
               ];
+              # Build against the patched tview. A directory replace doesn't
+              # change the module set, so vendorHash stays the same.
+              postPatch = (old.postPatch or "") + ''
+                cp -r ${tview} ../tview
+                chmod -R u+w ../tview
+                echo 'replace github.com/derailed/tview => ../tview' >> go.mod
+              '';
             });
           }
         );
