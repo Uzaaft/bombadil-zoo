@@ -1,0 +1,139 @@
+From e8c7ff5df26f6c9b1eefb0df39d31b8f0b697ef4 Mon Sep 17 00:00:00 2001
+From: Uzair Aftab <git@uzaaft.me>
+Date: Mon, 12 Oct 2026 13:05:15 +0200
+Subject: [PATCH] fix(dao): stop sharing one mutable scheme across table codecs
+
+k9s could die with "fatal error: concurrent map writes" in
+Table.codec while several views refreshed at once. Every codec call
+registered its group version into the package-level genScheme, and
+lists run on different goroutines, so the scheme's maps were written
+concurrently. The codec factories built from that scheme also read it
+while decoding, so even a mutex around registration would have left
+concurrent reads racing with writes.
+
+Each group version now gets its own scheme, built once under a mutex
+and never modified afterwards. The codecs only ever read a finished
+scheme, so they're safe to use concurrently.
+
+TestTableCodecConcurrent builds codecs for 20 group versions in
+parallel, then checks each scheme recognizes the Table kind. Without
+this change it fails under -race with data races and a concurrent map
+write.
+---
+ internal/dao/table.go          | 37 +++++++++++++++++++++++++++-------
+ internal/dao/table_int_test.go | 21 +++++++++++++++++++
+ 2 files changed, 51 insertions(+), 7 deletions(-)
+
+diff --git a/internal/dao/table.go b/internal/dao/table.go
+index 19fb1ca..8b58470 100644
+--- a/internal/dao/table.go
++++ b/internal/dao/table.go
+@@ -6,6 +6,7 @@ package dao
+ import (
+ 	"context"
+ 	"fmt"
++	"sync"
+ 
+ 	"github.com/derailed/k9s/internal"
+ 	"github.com/derailed/k9s/internal/client"
+@@ -14,6 +15,7 @@ import (
+ 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+ 	"k8s.io/apimachinery/pkg/labels"
+ 	"k8s.io/apimachinery/pkg/runtime"
++	"k8s.io/apimachinery/pkg/runtime/schema"
+ 	"k8s.io/apimachinery/pkg/runtime/serializer"
+ 	"k8s.io/client-go/rest"
+ )
+@@ -26,7 +28,13 @@ const (
+ 	header      = "application/json;as=Table;v=v1;g=meta.k8s.io,application/json;as=Table;v=v1beta1;g=meta.k8s.io,application/json"
+ )
+ 
+-var genScheme = runtime.NewScheme()
++var (
++	// tableSchemes holds one scheme per group version. Each is built once
++	// and never modified afterwards, so codecs that use it can decode
++	// concurrently while other group versions get registered.
++	tableSchemes   = make(map[schema.GroupVersion]*runtime.Scheme)
++	tableSchemesMx sync.Mutex
++)
+ 
+ // Table retrieves K8s resources as tabular data.
+ type Table struct {
+@@ -167,17 +175,32 @@ func (t *Table) getClient(f serializer.CodecFactory) (*rest.RESTClient, error) {
+ }
+ 
+ func (t *Table) codec() (serializer.CodecFactory, runtime.ParameterCodec, error) {
+-	var tt metav1.Table
+-	opts := metav1.TableOptions{IncludeObject: metav1.IncludeObject}
+ 	gv := t.gvr.GV()
+ 	// k9s-only resources such as xrays have no API group version and can't
+ 	// be registered with the scheme, which would panic.
+ 	if gv.Version == "" {
+ 		return serializer.CodecFactory{}, nil, fmt.Errorf("resource %q is not served by the API server", t.gvr)
+ 	}
+-	metav1.AddToGroupVersion(genScheme, gv)
+-	genScheme.AddKnownTypes(gv, &tt, &opts)
+-	genScheme.AddKnownTypes(metav1.SchemeGroupVersion, &tt, &opts)
++	s := tableScheme(gv)
++
++	return serializer.NewCodecFactory(s), runtime.NewParameterCodec(s), nil
++}
++
++func tableScheme(gv schema.GroupVersion) *runtime.Scheme {
++	tableSchemesMx.Lock()
++	defer tableSchemesMx.Unlock()
++
++	if s, ok := tableSchemes[gv]; ok {
++		return s
++	}
++
++	var tt metav1.Table
++	opts := metav1.TableOptions{IncludeObject: metav1.IncludeObject}
++	s := runtime.NewScheme()
++	metav1.AddToGroupVersion(s, gv)
++	s.AddKnownTypes(gv, &tt, &opts)
++	s.AddKnownTypes(metav1.SchemeGroupVersion, &tt, &opts)
++	tableSchemes[gv] = s
+ 
+-	return serializer.NewCodecFactory(genScheme), runtime.NewParameterCodec(genScheme), nil
++	return s
+ }
+diff --git a/internal/dao/table_int_test.go b/internal/dao/table_int_test.go
+index e47325c..28188dd 100644
+--- a/internal/dao/table_int_test.go
++++ b/internal/dao/table_int_test.go
+@@ -5,6 +5,8 @@ package dao
+ 
+ import (
+ 	"context"
++	"fmt"
++	"sync"
+ 	"testing"
+ 
+ 	"github.com/derailed/k9s/internal/client"
+@@ -24,3 +26,22 @@ func TestTableNoAPIVersion(t *testing.T) {
+ 		assert.Error(t, err)
+ 	})
+ }
++
++func TestTableCodecConcurrent(t *testing.T) {
++	var wg sync.WaitGroup
++	for i := range 20 {
++		wg.Go(func() {
++			var tb Table
++			tb.Init(nil, client.NewGVR(fmt.Sprintf("fred.io/v%d/blees", i)))
++			for range 50 {
++				_, _, _ = tb.codec()
++			}
++		})
++	}
++	wg.Wait()
++
++	for i := range 20 {
++		gv := client.NewGVR(fmt.Sprintf("fred.io/v%d/blees", i)).GV()
++		assert.True(t, tableScheme(gv).Recognizes(gv.WithKind("Table")))
++	}
++}
+-- 
+2.54.0
+

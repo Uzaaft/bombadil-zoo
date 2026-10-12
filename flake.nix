@@ -53,6 +53,8 @@
                 ./patches/k9s/0004-xray-invalid-filter-rx.patch
                 ./patches/k9s/0005-suggest-alias-race.patch
                 ./patches/k9s/0006-xray-filter-before-load.patch
+                ./patches/k9s/0007-recorder-send-on-closed.patch
+                ./patches/k9s/0008-table-scheme-race.patch
               ];
               # Build against the patched tview. A directory replace doesn't
               # change the module set, so vendorHash stays the same.

@@ -1,0 +1,161 @@
+From 24289476161bfad6d875477773ddf20e1dec2f42 Mon Sep 17 00:00:00 2001
+From: Uzair Aftab <git@uzaaft.me>
+Date: Mon, 12 Oct 2026 12:27:33 +0200
+Subject: [PATCH] fix(dao): keep metric watch channels owned by their watcher
+
+Switching views quickly could crash k9s with "panic: send on closed
+channel" in Recorder.dispatchSeries. Every Watch call shares one
+mxChan field. A new Watch closed the previous channel while the
+previous watcher's goroutine could still be sending to it, and
+dispatchSeries read the field without the lock. When an older watcher
+finished, it also closed whatever channel was current, which could
+belong to a newer watcher.
+
+Each Watch now creates its own channel and passes it to its goroutine.
+dispatchSeries only sends while that channel is still current, checked
+under the read lock, so Watch can't close it during the send. The
+send can't block, since the channel is buffered and gets a single
+value. When a watcher's context ends, closeWatch only closes the
+channel if it is still the current one.
+
+TestRecorderRewatch restarts a watch 1000 times and then expects the
+final watch to deliver its series. Without this change it reports
+data races under -race and sometimes panics.
+---
+ internal/dao/recorder.go          | 47 ++++++++++++++++++++-----------
+ internal/dao/recorder_int_test.go | 40 ++++++++++++++++++++++++++
+ 2 files changed, 71 insertions(+), 16 deletions(-)
+ create mode 100644 internal/dao/recorder_int_test.go
+
+diff --git a/internal/dao/recorder.go b/internal/dao/recorder.go
+index bf4ef68d..fae9cb5e 100644
+--- a/internal/dao/recorder.go
++++ b/internal/dao/recorder.go
+@@ -72,10 +72,7 @@ func (r *Recorder) Clear() {
+ 	}
+ }
+ 
+-func (r *Recorder) dispatchSeries(kind, ns string) {
+-	if r.mxChan == nil {
+-		return
+-	}
++func (r *Recorder) dispatchSeries(ch MetricsChan, kind, ns string) {
+ 	kk := r.series.Keys()
+ 	hour := time.Now().Add(-1 * time.Hour)
+ 	ts := make(TimeSeries, 0, len(kk))
+@@ -96,18 +93,41 @@ func (r *Recorder) dispatchSeries(kind, ns string) {
+ 			}
+ 		}
+ 	}
+-	if len(ts) > 0 {
+-		r.mxChan <- ts
++	if len(ts) == 0 {
++		return
++	}
++
++	// Only send while ch is still the current watch channel. Watch closes
++	// it under the write lock, so holding the read lock keeps it open. The
++	// channel is buffered and gets a single send per watch, so this never
++	// blocks.
++	r.mx.RLock()
++	defer r.mx.RUnlock()
++	if r.mxChan != ch {
++		return
++	}
++	ch <- ts
++}
++
++// closeWatch closes ch if it is still the current watch channel. A newer
++// Watch call may already have closed and replaced it.
++func (r *Recorder) closeWatch(ch MetricsChan) {
++	r.mx.Lock()
++	defer r.mx.Unlock()
++
++	if r.mxChan == ch {
++		close(ch)
++		r.mxChan = nil
+ 	}
+ }
+ 
+ func (r *Recorder) Watch(ctx context.Context, ns string) MetricsChan {
++	ch := make(MetricsChan, 2)
+ 	r.mx.Lock()
+ 	if r.mxChan != nil {
+ 		close(r.mxChan)
+-		r.mxChan = nil
+ 	}
+-	r.mxChan = make(MetricsChan, 2)
++	r.mxChan = ch
+ 	r.mx.Unlock()
+ 
+ 	go func() {
+@@ -125,17 +145,12 @@ func (r *Recorder) Watch(ctx context.Context, ns string) MetricsChan {
+ 				slog.Error("Record node metrics failed", slogs.Error, err)
+ 			}
+ 		}
+-		r.dispatchSeries(kind, ns)
++		r.dispatchSeries(ch, kind, ns)
+ 		<-ctx.Done()
+-		r.mx.Lock()
+-		if r.mxChan != nil {
+-			close(r.mxChan)
+-			r.mxChan = nil
+-		}
+-		r.mx.Unlock()
++		r.closeWatch(ch)
+ 	}()
+ 
+-	return r.mxChan
++	return ch
+ }
+ 
+ func (r *Recorder) Record(ctx context.Context) error {
+diff --git a/internal/dao/recorder_int_test.go b/internal/dao/recorder_int_test.go
+new file mode 100644
+index 00000000..9421aff8
+--- /dev/null
++++ b/internal/dao/recorder_int_test.go
+@@ -0,0 +1,40 @@
++// SPDX-License-Identifier: Apache-2.0
++// Copyright Authors of K9s
++
++package dao
++
++import (
++	"context"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/assert"
++	"k8s.io/apimachinery/pkg/util/cache"
++)
++
++func TestRecorderRewatch(t *testing.T) {
++	r := Recorder{series: cache.NewLRUExpireCache(10)}
++	r.series.Add("p1", Point{
++		Time: time.Now(),
++		Tags: map[string]string{"type": podMetrics, "namespace": "default"},
++	}, time.Minute)
++
++	var last MetricsChan
++	for range 1_000 {
++		ctx, cancel := context.WithCancel(context.Background())
++		last = r.Watch(ctx, "default")
++		cancel()
++	}
++
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	ch := r.Watch(ctx, "default")
++	select {
++	case ts, ok := <-ch:
++		assert.True(t, ok)
++		assert.Len(t, ts, 1)
++	case <-time.After(5 * time.Second):
++		t.Fatal("no series received")
++	}
++	assert.NotEqual(t, last, ch)
++}
+-- 
+2.54.0
+
