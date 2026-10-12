@@ -102,7 +102,11 @@
               export XDG_STATE_HOME="$state/xdg"
               mkdir -p "$K9S_CONFIG_DIR" "$XDG_STATE_HOME"
 
-              if ! ${pkgs.kind}/bin/kind get clusters 2>/dev/null | grep -qx fuzz; then
+              # The cluster is throwaway. If its API server doesn't answer
+              # (e.g. the node container stopped on reboot), recreate it
+              # rather than fuzz k9s against a dead connection.
+              if ! ${pkgs.kubectl}/bin/kubectl --request-timeout=5s get --raw /readyz >/dev/null 2>&1; then
+                ${pkgs.kind}/bin/kind delete cluster --name fuzz >/dev/null 2>&1 || true
                 ${pkgs.kind}/bin/kind create cluster --name fuzz
               fi
 
