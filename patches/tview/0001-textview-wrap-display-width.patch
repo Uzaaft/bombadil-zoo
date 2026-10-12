@@ -1,4 +1,4 @@
-From 79c828ee1b090847ad5971d853a03a0343a2c89b Mon Sep 17 00:00:00 2001
+From 1a28e3023b9aec7ef00125d7121895cafd3556a1 Mon Sep 17 00:00:00 2001
 From: Uzair Aftab <git@uzaaft.me>
 Date: Mon, 12 Oct 2026 11:41:25 +0200
 Subject: [PATCH] fix textview wrapping of multi-byte text
@@ -10,19 +10,28 @@ were miscounted too, so CJK text wrapped well before the edge. In k9s
 this shows up in every wrapped view that has non-ASCII text, e.g. the
 border lines of the error ("Ruroh?") screen.
 
-The wrap now walks the line one grapheme cluster at a time with
-iterateString and stops at the last cluster that still fits in width
-cells. A single cluster wider than the view is still extracted on its
-own, as before.
+The wrap now uses runewidth.Truncate, as the old BOZO comment
+suggested. It walks grapheme clusters and measures them the same way
+stringWidth does, so lines are cut at the screen width and combining
+marks or emoji sequences stay intact. A cluster wider than the view
+still falls through to the existing single-cluster extraction.
 ---
- textview.go | 18 +++++++++++-------
- 1 file changed, 11 insertions(+), 7 deletions(-)
+ textview.go | 11 ++++-------
+ 1 file changed, 4 insertions(+), 7 deletions(-)
 
 diff --git a/textview.go b/textview.go
-index 3cc840d..96a6e01 100644
+index 3cc840d..6fe0da5 100644
 --- a/textview.go
 +++ b/textview.go
-@@ -772,13 +772,17 @@ func (t *TextView) reindexBuffer(width int) {
+@@ -10,6 +10,7 @@ import (
+ 
+ 	"github.com/derailed/tcell/v2"
+ 	colorful "github.com/lucasb-eyer/go-colorful"
++	"github.com/mattn/go-runewidth"
+ 	"github.com/rivo/uniseg"
+ )
+ 
+@@ -772,13 +773,9 @@ func (t *TextView) reindexBuffer(width int) {
  		if t.wrap && len(strippedStr) > 0 {
  			var extract string
  			for len(strippedStr) > 0 {
@@ -33,17 +42,9 @@ index 3cc840d..96a6e01 100644
 -				} else {
 -					extract = strippedStr
 -				}
-+				// Take as many whole grapheme clusters as fit in width
-+				// screen cells. Slicing by bytes would split multi-byte
-+				// characters and miscount wide ones.
-+				extract = strippedStr
-+				iterateString(strippedStr, func(_ rune, _ []rune, textPos, _, screenPos, screenWidth int) bool {
-+					if screenPos+screenWidth > width {
-+						extract = strippedStr[:textPos]
-+						return true
-+					}
-+					return false
-+				})
++				// Cut at the screen width, not the byte length, so multi-byte
++				// and wide characters aren't split or miscounted.
++				extract = runewidth.Truncate(strippedStr, width, "")
  
  				if len(extract) == 0 {
  					// We'll extract at least one grapheme cluster.
