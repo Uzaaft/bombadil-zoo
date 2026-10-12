@@ -49,6 +49,8 @@
               patches = (old.patches or [ ]) ++ [
                 ./patches/k9s/0001-xray-nil-root.patch
                 ./patches/k9s/0002-cmdbuff-listener-race.patch
+                ./patches/k9s/0003-table-no-api-version.patch
+                ./patches/k9s/0004-xray-invalid-filter-rx.patch
               ];
               # Build against the patched tview. A directory replace doesn't
               # change the module set, so vendorHash stays the same.
@@ -112,13 +114,25 @@
 
               run="$state/runs/$(date +%Y%m%d-%H%M%S)"
               mkdir -p "$run"
-              echo "fuzz: writing traces and k9s.log to $run" >&2
+              echo "fuzz: writing traces, k9s.log and stderr/ to $run" >&2
 
-              exec ${bombadil.default}/bin/bombadil terminal fuzz \
+              # k9s draws on /dev/tty, so its stderr only carries Go crash
+              # output. Keep one file per k9s process, since workers run in
+              # parallel, and drop the empty ones afterwards.
+              mkdir -p "$run/stderr"
+              status=0
+              # The inner script is single-quoted on purpose: $1 and $$ belong
+              # to the bash that execs k9s.
+              # shellcheck disable=SC2016
+              ${bombadil.default}/bin/bombadil terminal fuzz \
                 --specification "$root/spec.ts" \
                 --output-path "$run" \
                 "$@" \
-                -- ${k9s}/bin/k9s --readonly --logFile "$run/k9s.log"
+                -- ${pkgs.bash}/bin/bash -c \
+                'exec ${k9s}/bin/k9s --readonly --logFile "$1/k9s.log" 2>"$1/stderr/$$"' \
+                k9s "$run" || status=$?
+              find "$run/stderr" -type f -empty -delete
+              exit "$status"
             '';
           };
         in

@@ -1,0 +1,108 @@
+From 721076396cffb19dff08faa40be31d8caf893671 Mon Sep 17 00:00:00 2001
+From: Uzair Aftab <git@uzaaft.me>
+Date: Mon, 12 Oct 2026 12:13:21 +0200
+Subject: [PATCH] fix(dao): return an error for resources without an API
+ version
+
+Opening the xrays entry from the aliases view (ctrl-a, select xrays,
+enter) crashed k9s with "version is required on all types: /,
+Kind=WatchEvent". xrays is a k9s-only resource with no API group or
+version, so the generic table accessor registered its types with the
+scheme under an empty group version, and AddToGroupVersion panicked.
+
+Table.codec now returns an error when the resource has no API version,
+and Get and List return that error instead of building a client. The
+view shows the error rather than taking the process down.
+
+TestTableNoAPIVersion calls List and Get for xrays and fails without
+this change.
+---
+ internal/dao/table.go          | 19 +++++++++++++++----
+ internal/dao/table_int_test.go | 26 ++++++++++++++++++++++++++
+ 2 files changed, 41 insertions(+), 4 deletions(-)
+ create mode 100644 internal/dao/table_int_test.go
+
+diff --git a/internal/dao/table.go b/internal/dao/table.go
+index a5b4cdd4..19fb1ca2 100644
+--- a/internal/dao/table.go
++++ b/internal/dao/table.go
+@@ -35,7 +35,10 @@ type Table struct {
+ 
+ // Get returns a given resource.
+ func (t *Table) Get(ctx context.Context, path string) (runtime.Object, error) {
+-	f, p := t.codec()
++	f, p, err := t.codec()
++	if err != nil {
++		return nil, err
++	}
+ 	c, err := t.getClient(f)
+ 	if err != nil {
+ 		return nil, err
+@@ -68,7 +71,10 @@ func (t *Table) List(ctx context.Context, ns string) ([]runtime.Object, error) {
+ 		includeObject = includeObj
+ 	}
+ 
+-	f, _ := t.codec()
++	f, _, err := t.codec()
++	if err != nil {
++		return nil, err
++	}
+ 	c, err := t.getClient(f)
+ 	if err != nil {
+ 		return nil, err
+@@ -160,13 +166,18 @@ func (t *Table) getClient(f serializer.CodecFactory) (*rest.RESTClient, error) {
+ 	return crRestClient, nil
+ }
+ 
+-func (t *Table) codec() (serializer.CodecFactory, runtime.ParameterCodec) {
++func (t *Table) codec() (serializer.CodecFactory, runtime.ParameterCodec, error) {
+ 	var tt metav1.Table
+ 	opts := metav1.TableOptions{IncludeObject: metav1.IncludeObject}
+ 	gv := t.gvr.GV()
++	// k9s-only resources such as xrays have no API group version and can't
++	// be registered with the scheme, which would panic.
++	if gv.Version == "" {
++		return serializer.CodecFactory{}, nil, fmt.Errorf("resource %q is not served by the API server", t.gvr)
++	}
+ 	metav1.AddToGroupVersion(genScheme, gv)
+ 	genScheme.AddKnownTypes(gv, &tt, &opts)
+ 	genScheme.AddKnownTypes(metav1.SchemeGroupVersion, &tt, &opts)
+ 
+-	return serializer.NewCodecFactory(genScheme), runtime.NewParameterCodec(genScheme)
++	return serializer.NewCodecFactory(genScheme), runtime.NewParameterCodec(genScheme), nil
+ }
+diff --git a/internal/dao/table_int_test.go b/internal/dao/table_int_test.go
+new file mode 100644
+index 00000000..e47325c2
+--- /dev/null
++++ b/internal/dao/table_int_test.go
+@@ -0,0 +1,26 @@
++// SPDX-License-Identifier: Apache-2.0
++// Copyright Authors of K9s
++
++package dao
++
++import (
++	"context"
++	"testing"
++
++	"github.com/derailed/k9s/internal/client"
++	"github.com/stretchr/testify/assert"
++)
++
++func TestTableNoAPIVersion(t *testing.T) {
++	var tb Table
++	tb.Init(nil, client.XGVR)
++
++	assert.NotPanics(t, func() {
++		_, err := tb.List(context.Background(), client.ClusterScope)
++		assert.Error(t, err)
++	})
++	assert.NotPanics(t, func() {
++		_, err := tb.Get(context.Background(), "fred")
++		assert.Error(t, err)
++	})
++}
+-- 
+2.54.0
+

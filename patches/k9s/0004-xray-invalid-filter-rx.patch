@@ -1,0 +1,123 @@
+From 1b256770d39aa5d543799117a99800ca999ce6f3 Mon Sep 17 00:00:00 2001
+From: Uzair Aftab <git@uzaaft.me>
+Date: Mon, 12 Oct 2026 12:14:12 +0200
+Subject: [PATCH] fix(xray): don't panic on an invalid filter regexp
+
+Typing a filter into the Xray view that isn't a valid regular
+expression, e.g. "/+foo" or "/?:cm", crashed k9s. rxFilter,
+rxInverseFilter and the tree model's rxMatch all compiled the user's
+query with regexp.MustCompile, so a parse error panicked inside the
+draw loop.
+
+They now use regexp.Compile and treat an invalid pattern as matching
+nothing, the same way the describe, YAML and log filters already
+handle it.
+
+TestXrayRxFilterInvalidRegexp and TestRxMatchInvalidRegexp feed
+invalid patterns to each function and fail without this change.
+---
+ internal/model/helpers_int_test.go |  7 +++++++
+ internal/model/tree.go             |  5 ++++-
+ internal/view/xray.go              | 10 ++++++++--
+ internal/view/xray_int_test.go     | 29 +++++++++++++++++++++++++++++
+ 4 files changed, 48 insertions(+), 3 deletions(-)
+
+diff --git a/internal/model/helpers_int_test.go b/internal/model/helpers_int_test.go
+index 3e7e5406..82d8f92e 100644
+--- a/internal/model/helpers_int_test.go
++++ b/internal/model/helpers_int_test.go
+@@ -93,3 +93,10 @@ func Test_rxFilter(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestRxMatchInvalidRegexp(t *testing.T) {
++	assert.True(t, rxMatch("fred", "default::fred"))
++	assert.NotPanics(t, func() {
++		assert.False(t, rxMatch("?1x:pvc", "default::fred"))
++	})
++}
+diff --git a/internal/model/tree.go b/internal/model/tree.go
+index 429f692f..6cb32489 100644
+--- a/internal/model/tree.go
++++ b/internal/model/tree.go
+@@ -278,7 +278,10 @@ func (t *Tree) getMeta(ctx context.Context, gvr *client.GVR) (ResourceMeta, erro
+ // Helpers...
+ 
+ func rxMatch(q, path string) bool {
+-	rx := regexp.MustCompile(`(?i)` + q)
++	rx, err := regexp.Compile(`(?i)` + q)
++	if err != nil {
++		return false
++	}
+ 
+ 	tokens := strings.Split(path, "::")
+ 	for _, t := range tokens {
+diff --git a/internal/view/xray.go b/internal/view/xray.go
+index 8bcf6e45..51621cc2 100644
+--- a/internal/view/xray.go
++++ b/internal/view/xray.go
+@@ -778,7 +778,10 @@ func fuzzyFilter(q, path string) bool {
+ }
+ 
+ func rxFilter(q, path string) bool {
+-	rx := regexp.MustCompile(`(?i)` + q)
++	rx, err := regexp.Compile(`(?i)` + q)
++	if err != nil {
++		return false
++	}
+ 	tokens := strings.Split(path, xray.PathSeparator)
+ 	for _, t := range tokens {
+ 		if rx.MatchString(t) {
+@@ -791,7 +794,10 @@ func rxFilter(q, path string) bool {
+ 
+ func rxInverseFilter(q, path string) bool {
+ 	q = strings.TrimSpace(q[1:])
+-	rx := regexp.MustCompile(`(?i)` + q)
++	rx, err := regexp.Compile(`(?i)` + q)
++	if err != nil {
++		return false
++	}
+ 	tokens := strings.Split(path, xray.PathSeparator)
+ 	for _, t := range tokens {
+ 		if rx.MatchString(t) {
+diff --git a/internal/view/xray_int_test.go b/internal/view/xray_int_test.go
+index df27615e..428cd41b 100644
+--- a/internal/view/xray_int_test.go
++++ b/internal/view/xray_int_test.go
+@@ -20,3 +20,32 @@ func TestXrayGotoCmdBeforeTreeLoaded(t *testing.T) {
+ 	})
+ 	assert.False(t, v.CmdBuff().IsActive())
+ }
++
++func TestXrayRxFilterInvalidRegexp(t *testing.T) {
++	uu := map[string]struct {
++		q, path string
++		filter  func(q, path string) bool
++		e       bool
++	}{
++		"match": {
++			q: "fred", path: "default/fred", filter: rxFilter, e: true,
++		},
++		"invalid": {
++			q: "+:xray deploy", path: "default/fred", filter: rxFilter,
++		},
++		"inverse-match": {
++			q: "!fred", path: "default/blee", filter: rxInverseFilter, e: true,
++		},
++		"inverse-invalid": {
++			q: "!?:cm", path: "default/blee", filter: rxInverseFilter,
++		},
++	}
++
++	for k, u := range uu {
++		t.Run(k, func(t *testing.T) {
++			assert.NotPanics(t, func() {
++				assert.Equal(t, u.e, u.filter(u.q, u.path))
++			})
++		})
++	}
++}
+-- 
+2.54.0
+
