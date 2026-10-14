@@ -6,6 +6,7 @@ property-based terminal testing.
 | Harness | Target | Run |
 | --- | --- | --- |
 | [`k9s`](harnesses/k9s) | [k9s](https://github.com/derailed/k9s), against a throwaway kind cluster | `nix run .#fuzz-k9s` |
+| [`yazi`](harnesses/yazi) | [yazi](https://github.com/sxyazi/yazi), inside the Nix build sandbox | `nix run .#fuzz-yazi` |
 
 Arguments after `--` go to `bombadil terminal fuzz`, e.g.
 `nix run .#fuzz-k9s -- --time-limit-fuzz 30m --swarm`. Each campaign writes
@@ -19,7 +20,7 @@ to `.state/<harness>/runs/<timestamp>/`.
 ```
 flake.nix                 collects every harness
 harnesses/<name>/
-  default.nix             { pkgs, bombadil } -> { packages, apps, devShell }
+  default.nix             { pkgs, bombadil } -> { packages, apps, devShell, legacyPackages? }
   spec.ts                 the Bombadil specification
   patches/                fixes applied to the target while they're pending upstream
 ```
@@ -41,4 +42,6 @@ The flake picks up every directory under `harnesses/` automatically.
 gives just one.
 
 If the target can run arbitrary commands (e.g. a file manager's shell
-prompt), run it inside a sandbox rather than directly on your machine.
+prompt), run the campaign as a Nix build, like `harnesses/yazi`. The build
+sandbox has no network and no access to your home directory. Keep only the
+traces of failing runs: a full campaign's traces run to hundreds of gigabytes.
