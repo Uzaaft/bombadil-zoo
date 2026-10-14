@@ -1,57 +1,34 @@
 // Bombadil specification for k9s.
 //
-//   kind create cluster --name fuzz
-//   bombadil terminal test --specification spec.ts --time-limit 5m k9s --readonly
-//
-// --readonly disables shell, edit, delete, scale, etc., so the fuzzer can't
-// leave the TUI or mutate the cluster.
-import { always, eventually } from "@antithesishq/bombadil";
-import { CharSet } from "@antithesishq/bombadil/actions";
-import {
-  type ActionTemplate,
-  extract,
-  weighted,
-} from "@antithesishq/bombadil/terminal";
+// k9s runs with --readonly, which disables shell, edit, delete, scale, etc.,
+// so the fuzzer can't leave the TUI or change the cluster.
+import { weighted } from "@antithesishq/bombadil/terminal";
 import {
   CharSets,
   typeFromSet,
 } from "@antithesishq/bombadil/terminal/defaults/actions";
+import {
+  keys,
+  noCrashText,
+  pauseAfterEscape,
+  resize,
+} from "../../lib/spec/common.ts";
 export {
   exitSuccess,
   noReplacementChars,
 } from "@antithesishq/bombadil/terminal/defaults/properties";
-
-const screen = extract((state) => {
-  const rows = [];
-  for (let i = 0; i < state.grid.size.rows; i++) {
-    rows.push(state.grid.rowText(i));
-  }
-  return rows.join("\n");
-});
-
-const exited = extract((state) => state.exitStatus !== null);
+export { neverStuckBlank } from "../../lib/spec/common.ts";
 
 // Properties
 
 // k9s recovers panics in cmd/root.go, prints "Boom!!" and exits 0, so
-// exitSuccess alone misses them. Unrecovered goroutine panics print a trace.
-export const noPanic = always(
-  () => !/Boom!!|panic: |goroutine \d+ \[/.test(screen.current ?? ""),
-);
-
-// The screen may blank during a redraw, but never stays blank while k9s is
-// running. Quitting is legitimate (e.g. selecting "quit" in the aliases
-// view), and the screen is empty after that.
-export const neverStuckBlank = always(
-  eventually(
-    () => !!exited.current || (screen.current ?? "").trim() !== "",
-  ).within(5, "seconds"),
+// exitSuccess alone misses them. Unrecovered panics and runtime fatal errors
+// print a trace.
+export const noPanic = noCrashText(
+  /Boom!!|panic: |fatal error: |goroutine \d+ \[/,
 );
 
 // Actions
-
-const keys = (...literals: string[]) =>
-  typeFromSet(CharSet.fromLiterals(...literals));
 
 const navigate = keys(
   "\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D", // arrows
@@ -77,15 +54,13 @@ const command = keys(
 
 const filter = keys("/kube\r", "/core\r", "/-l app=x\r", "/!system\r", "/\x1b");
 
-const resize: ActionTemplate = {
-  Resize: { columns: [20, 200], rows: [5, 60] },
-};
-
-export const drive = weighted([
-  [40, navigate],
-  [20, viewKeys],
-  [15, command],
-  [10, filter],
-  [5, typeFromSet(CharSets.ASCII_PRINTABLE)],
-  [2, resize],
-]);
+export const drive = pauseAfterEscape(
+  weighted([
+    [40, navigate],
+    [20, viewKeys],
+    [15, command],
+    [10, filter],
+    [5, typeFromSet(CharSets.ASCII_PRINTABLE)],
+    [2, resize([20, 200], [5, 60])],
+  ]),
+);
