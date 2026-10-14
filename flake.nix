@@ -24,7 +24,8 @@
         "aarch64-darwin"
       ];
       # Every directory under harnesses/ is a harness. Each one's default.nix
-      # takes { pkgs, bombadil } and returns { packages, apps, devShell }.
+      # takes { pkgs, bombadil } and returns { packages, apps, devShell } and
+      # optionally legacyPackages.
       harnessNames = builtins.attrNames (
         lib.filterAttrs (_: type: type == "directory") (builtins.readDir ./harnesses)
       );
@@ -59,6 +60,13 @@
           default = bombadil.default;
         }
         // lib.concatMapAttrs (_: h: h.packages) harnesses
+      );
+
+      # Things that can't be packages, e.g. functions that build a campaign
+      # derivation per invocation.
+      legacyPackages = forAllSystems (
+        { harnesses, ... }:
+        lib.foldl' lib.recursiveUpdate { } (lib.mapAttrsToList (_: h: h.legacyPackages or { }) harnesses)
       );
 
       apps = forAllSystems (
