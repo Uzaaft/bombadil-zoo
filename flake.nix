@@ -23,9 +23,10 @@
         "aarch64-linux"
         "aarch64-darwin"
       ];
-      # Every directory under harnesses/ is a harness. Each one's default.nix
-      # takes { pkgs, bombadil } and returns { packages, apps, devShell } and
-      # optionally legacyPackages.
+      # Every directory under harnesses/ is a harness. Its default.nix takes
+      # { pkgs, bombadil, zoo } and returns packages, apps, a devShell and
+      # optionally checks and legacyPackages, mostly via zoo.sandboxed or
+      # zoo.host from lib/.
       harnessNames = builtins.attrNames (
         lib.filterAttrs (_: type: type == "directory") (builtins.readDir ./harnesses)
       );
@@ -36,19 +37,25 @@
           let
             pkgs = nixpkgs.legacyPackages.${system};
             bombadil' = bombadil.packages.${system};
+            zoo = import ./lib {
+              inherit pkgs;
+              bombadil = bombadil';
+            };
           in
           f {
-            inherit pkgs;
+            inherit pkgs zoo;
             bombadil = bombadil';
             harnesses = lib.genAttrs harnessNames (
               name:
               import ./harnesses/${name} {
-                inherit pkgs;
+                inherit pkgs zoo;
                 bombadil = bombadil';
               }
             );
           }
         );
+
+      merge = attr: harnesses: lib.concatMapAttrs (_: h: h.${attr} or { }) harnesses;
     in
     {
       packages = forAllSystems (
@@ -59,11 +66,11 @@
           bombadil-npm = bombadil.npm-package;
           default = bombadil.default;
         }
-        // lib.concatMapAttrs (_: h: h.packages) harnesses
+        // merge "packages" harnesses
       );
 
-      # Things that can't be packages, e.g. functions that build a campaign
-      # derivation per invocation.
+      # Things that can't be packages, e.g. the functions that build a
+      # campaign derivation per invocation.
       legacyPackages = forAllSystems (
         { harnesses, ... }:
         lib.foldl' lib.recursiveUpdate { } (lib.mapAttrsToList (_: h: h.legacyPackages or { }) harnesses)
@@ -77,7 +84,41 @@
             program = "${bombadil.default}/bin/bombadil";
           };
         }
-        // lib.concatMapAttrs (_: h: h.apps) harnesses
+        // merge "apps" harnesses
+      );
+
+      # nix flake check: type-checks every spec, builds every harness's
+      # packages, and runs a short smoke campaign for sandboxed harnesses.
+      checks = forAllSystems (
+        {
+          pkgs,
+          bombadil,
+          harnesses,
+          ...
+        }:
+        {
+          specs =
+            pkgs.runCommand "specs"
+              {
+                src = lib.fileset.toSource {
+                  root = ./.;
+                  fileset = lib.fileset.unions [
+                    ./tsconfig.json
+                    ./lib/spec
+                    (lib.fileset.fileFilter (f: f.name == "spec.ts") ./harnesses)
+                  ];
+                };
+              }
+              ''
+                cp -r $src/. . && chmod -R u+w .
+                mkdir -p node_modules/@antithesishq
+                ln -s ${bombadil.npm-package} node_modules/@antithesishq/bombadil
+                ${pkgs.typescript}/bin/tsc -p tsconfig.json
+                touch $out
+              '';
+        }
+        // merge "packages" harnesses
+        // merge "checks" harnesses
       );
 
       devShells = forAllSystems (
@@ -85,6 +126,7 @@
           pkgs,
           bombadil,
           harnesses,
+          ...
         }:
         let
           base = pkgs.mkShell {
@@ -101,10 +143,13 @@
               nixfmt
             ];
 
-            # An export rather than an attribute, because mkShell's inputsFrom
+            # Exports rather than attributes, because mkShell's inputsFrom
             # carries shellHooks over but not plain environment variables.
+            # The node_modules link lets editors resolve the bombadil types.
             shellHook = ''
               export BOMBADIL_NPM_PACKAGE="${bombadil.npm-package}"
+              mkdir -p node_modules/@antithesishq
+              ln -sfn "$BOMBADIL_NPM_PACKAGE" node_modules/@antithesishq/bombadil
             '';
           };
         in

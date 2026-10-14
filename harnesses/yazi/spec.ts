@@ -1,52 +1,30 @@
 // Bombadil specification for yazi, the terminal file manager.
 //
-// Runs inside a Nix build sandbox (see default.nix), because yazi's shell
-// prompts execute whatever gets typed into them.
-import { always, eventually } from "@antithesishq/bombadil";
-import { CharSet } from "@antithesishq/bombadil/actions";
-import {
-  type ActionTemplate,
-  extract,
-  weighted,
-} from "@antithesishq/bombadil/terminal";
+// Runs in the Nix sandbox, because yazi's shell prompts execute whatever
+// gets typed into them.
+import { weighted } from "@antithesishq/bombadil/terminal";
 import {
   CharSets,
   typeFromSet,
 } from "@antithesishq/bombadil/terminal/defaults/actions";
+import {
+  keys,
+  noCrashText,
+  pauseAfterEscape,
+  resize,
+} from "../../lib/spec/common.ts";
 export {
   exitSuccess,
   noReplacementChars,
 } from "@antithesishq/bombadil/terminal/defaults/properties";
-
-const screen = extract((state) => {
-  const rows = [];
-  for (let i = 0; i < state.grid.size.rows; i++) {
-    rows.push(state.grid.rowText(i));
-  }
-  return rows.join("\n");
-});
-
-const exited = extract((state) => state.exitStatus !== null);
+export { neverStuckBlank } from "../../lib/spec/common.ts";
 
 // Properties
 
 // A Rust panic prints "panicked at" before yazi exits.
-export const noPanic = always(
-  () => !/panicked at/.test(screen.current ?? ""),
-);
-
-// The screen may blank during a redraw, but never stays blank while yazi is
-// running.
-export const neverStuckBlank = always(
-  eventually(
-    () => !!exited.current || (screen.current ?? "").trim() !== "",
-  ).within(5, "seconds"),
-);
+export const noPanic = noCrashText(/panicked at/);
 
 // Actions
-
-const keys = (...literals: string[]) =>
-  typeFromSet(CharSet.fromLiterals(...literals));
 
 const navigate = keys(
   "h", "j", "k", "l",
@@ -68,22 +46,27 @@ const fileOps = keys(
 // Keys that open a prompt. Whatever follows is typed into it.
 const prompts = keys("a", "r", "/", "?", "f", ":", ";", "s", "S", "z", "Z");
 
+// Editing keys inside a prompt, e.g. Ctrl+K kills to the end of line.
+const promptEditing = keys(
+  "\x0b", "\x15", "\x17", "\x08", "\x7f", // Ctrl+K, Ctrl+U, Ctrl+W, Ctrl+H, Backspace
+  "\x1b[H", "\x1b[F", // Home, End
+);
+
 const tabs = keys("t", "1", "2", "3", "[", "]", "{", "}", "\x1b[Z");
 
 const views = keys("~", "w", ",", "m", "'", "\x0c", "\x1b[5~", "\x1b[6~");
 
-const resize: ActionTemplate = {
-  Resize: { columns: [20, 200], rows: [5, 60] },
-};
-
-export const drive = weighted([
-  [40, navigate],
-  [20, fileOps],
-  [10, prompts],
-  [10, typeFromSet(CharSets.ASCII_PRINTABLE)],
-  [8, tabs],
-  [6, views],
-  [3, typeFromSet(CharSets.UNICODE_SAFE)],
-  [2, resize],
-  [1, keys("q", "Q")],
-]);
+export const drive = pauseAfterEscape(
+  weighted([
+    [40, navigate],
+    [20, fileOps],
+    [10, prompts],
+    [10, typeFromSet(CharSets.ASCII_PRINTABLE)],
+    [6, promptEditing],
+    [8, tabs],
+    [6, views],
+    [3, typeFromSet(CharSets.UNICODE_SAFE)],
+    [2, resize([20, 200], [5, 60])],
+    [1, keys("q", "Q")],
+  ]),
+);

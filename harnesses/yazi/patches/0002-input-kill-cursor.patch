@@ -1,0 +1,91 @@
+From 70a200b38b0e31644c82b52bd6fef181fe15186a Mon Sep 17 00:00:00 2001
+From: Uzair Aftab <git@uzaaft.me>
+Date: Wed, 14 Oct 2026 13:13:31 +0200
+Subject: [PATCH] fix: keep the input cursor in characters after a kill
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Renaming a file with a non-ASCII name and pressing Ctrl+K, e.g. `r` on
+"blåbær.txt" then Ctrl+K, panicked with an unwrap on None. kill_range
+set the cursor to the start of the killed range, but that range is a
+byte offset into the value, while the cursor counts characters. With
+the cursor at the end of the line nothing is killed, so the function
+returned before the follow-up move could clamp the cursor, leaving it
+past the end of the value. The next render then panicked in
+InputSnap::slice, and typing a character panicked in Input::insert_str.
+When something was killed, e.g. with Ctrl+W, the cursor was clamped but
+could land in the wrong place, at the end of the line instead of where
+the killed word had been.
+
+kill_range now converts the byte offset into a character index before
+setting the cursor.
+
+kill_eol_at_end_of_multibyte_value covers the panic, and
+kill_backward_keeps_cursor_in_characters covers the misplaced cursor.
+Both fail without this change. The key sequence above crashes yazi
+26.9.1 and no longer crashes it with this change applied, and neither do
+fuzzing traces that hit the insert_str panic. The bug was found by
+fuzzing yazi with Bombadil.
+---
+ yazi-widgets/src/input/actor/kill.rs | 36 +++++++++++++++++++++++++++-
+ 1 file changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/yazi-widgets/src/input/actor/kill.rs b/yazi-widgets/src/input/actor/kill.rs
+index c49b1514..6df54e60 100644
+--- a/yazi-widgets/src/input/actor/kill.rs
++++ b/yazi-widgets/src/input/actor/kill.rs
+@@ -35,11 +35,13 @@ impl Input {
+ 
+ 	fn kill_range(&mut self, range: impl RangeBounds<usize>) -> Result<Data> {
+ 		let snap = self.snap_mut();
+-		snap.cursor = match range.start_bound() {
++		let start = match range.start_bound() {
+ 			std::ops::Bound::Included(i) => *i,
+ 			std::ops::Bound::Excluded(_) => unreachable!(),
+ 			std::ops::Bound::Unbounded => 0,
+ 		};
++		// The range is in bytes, but the cursor counts characters.
++		snap.cursor = snap.value[..start].chars().count();
+ 		if snap.value.drain(range).next().is_none() {
+ 			succ!();
+ 		}
+@@ -85,3 +87,35 @@ impl Input {
+ 		input.take(n).fold(0, |acc, c| acc + c.len_utf8())
+ 	}
+ }
++
++#[cfg(test)]
++mod tests {
++	use ratatui_core::layout::Rect;
++
++	use crate::input::{Input, InputOpt, parser::{KillOpt, MoveOpt}};
++
++	fn kill(input: &mut Input, kind: &str) { input.kill(KillOpt { kind: kind.to_owned().into() }).unwrap(); }
++
++	#[test]
++	fn kill_eol_at_end_of_multibyte_value() {
++		let mut input = Input::new(InputOpt::default()).unwrap();
++		input.repos(Rect::new(0, 0, 10, 1));
++		input.insert_str("é").unwrap();
++		kill(&mut input, "eol");
++
++		assert_eq!(input.value(), "é");
++		assert_eq!(input.snap().cursor, 1);
++		assert_eq!(input.cursor(), 1);
++	}
++
++	#[test]
++	fn kill_backward_keeps_cursor_in_characters() {
++		let mut input = Input::new(InputOpt::default()).unwrap();
++		input.insert_str("日本 ab cd").unwrap();
++		input.r#move(MoveOpt { step: (-3).into(), in_operating: false }).unwrap();
++		kill(&mut input, "backward");
++
++		assert_eq!(input.value(), "日本  cd");
++		assert_eq!(input.snap().cursor, 3);
++	}
++}
+-- 
+2.54.0
+

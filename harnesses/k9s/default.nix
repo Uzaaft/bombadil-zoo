@@ -1,8 +1,13 @@
 # Fuzz harness for k9s, the Kubernetes TUI.
 #
-# k9s needs a cluster, so the harness runs against a throwaway kind cluster
-# and keeps all kube and k9s state under .state/k9s.
-{ pkgs, bombadil }:
+# k9s needs a cluster, so it runs on the host against a throwaway kind
+# cluster, with all kube and k9s state under .state/k9s and --readonly so it
+# can't change the cluster.
+{
+  pkgs,
+  zoo,
+  ...
+}:
 let
   # The tview version k9s 0.51.0 requires, with our fixes applied.
   tview = pkgs.applyPatches {
@@ -47,64 +52,33 @@ let
     mkdir -p "$K9S_CONFIG_DIR" "$XDG_STATE_HOME"
   '';
 
-  fuzz = pkgs.writeShellApplication {
-    name = "fuzz-k9s";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.gnugrep
-    ];
-    text = ''
-      root="$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd)"
-      state="$root/.state/k9s"
-      ${isolate}
-
-      # The cluster is throwaway. If its API server doesn't answer (e.g. the
-      # node container stopped on reboot), recreate it rather than fuzz k9s
-      # against a dead connection.
-      if ! ${pkgs.kubectl}/bin/kubectl --request-timeout=5s get --raw /readyz >/dev/null 2>&1; then
-        ${pkgs.kind}/bin/kind delete cluster --name fuzz >/dev/null 2>&1 || true
-        ${pkgs.kind}/bin/kind create cluster --name fuzz
-      fi
-
-      run="$state/runs/$(date +%Y%m%d-%H%M%S)"
-      mkdir -p "$run"
-      echo "fuzz-k9s: writing traces, k9s.log and stderr/ to $run" >&2
-
-      # k9s draws on /dev/tty, so its stderr only carries Go crash output.
-      # Keep one file per k9s process, since workers run in parallel, and
-      # drop the empty ones afterwards.
-      mkdir -p "$run/stderr"
-      status=0
-      # The inner script is single-quoted on purpose: $1 and $$ belong to
-      # the bash that execs k9s.
-      # shellcheck disable=SC2016
-      ${bombadil.default}/bin/bombadil terminal fuzz \
-        --specification "$root/harnesses/k9s/spec.ts" \
-        --output-path "$run" \
-        "$@" \
-        -- ${pkgs.bash}/bin/bash -c \
-        'exec ${k9s}/bin/k9s --readonly --logFile "$1/k9s.log" 2>"$1/stderr/$$"' \
-        k9s "$run" || status=$?
-      find "$run/stderr" -type f -empty -delete
-      exit "$status"
-    '';
-  };
+  launch = pkgs.writeShellScript "k9s-launch" ''
+    exec ${k9s}/bin/k9s --readonly --logFile "$1/k9s.log" ${zoo.teeStderr}
+  '';
 in
-{
+zoo.host {
+  name = "k9s";
+  inherit launch;
+  setup = ''
+    ${isolate}
+    # The cluster is throwaway. If its API server doesn't answer (e.g. the
+    # node container stopped on reboot), recreate it rather than fuzz k9s
+    # against a dead connection.
+    if ! ${pkgs.kubectl}/bin/kubectl --request-timeout=5s get --raw /readyz >/dev/null 2>&1; then
+      ${pkgs.kind}/bin/kind delete cluster --name fuzz >/dev/null 2>&1 || true
+      ${pkgs.kind}/bin/kind create cluster --name fuzz
+    fi
+  '';
+}
+// {
   packages = {
     inherit k9s;
     k9s-upstream = pkgs.k9s;
   };
 
-  apps.fuzz-k9s = {
-    type = "app";
-    program = "${fuzz}/bin/fuzz-k9s";
-  };
-
   devShell = pkgs.mkShell {
     packages = [
       k9s
-      # A throwaway cluster for k9s to talk to.
       pkgs.kind
       pkgs.kubectl
     ];

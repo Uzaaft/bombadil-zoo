@@ -1,0 +1,105 @@
+From 3ea023dd2703f6ea0a03b07785e40759b3704636 Mon Sep 17 00:00:00 2001
+From: Uzair Aftab <git@uzaaft.me>
+Date: Wed, 14 Oct 2026 13:12:49 +0200
+Subject: [PATCH] fix: clamp input operation ranges to the current value
+
+Pasting in an empty input while an operator waits for its motion, e.g.
+in the find prompt: `/`, Esc, `y`, `p` (or `c`, `P`), panicked
+with an unwrap on None in Input::handle_op. paste turns the pending
+operation into a delete over it, and the delete includes the character
+under the cursor, so its range was 0..1. An empty value has no
+character index 1, so the index lookup failed.
+
+InputSnap::op_range now computes a pending operation's range and
+clamps it to the character count. The delete and yank branches use it,
+so their index lookups always succeed. In this case the paste deletes
+nothing and inserts the clipboard as usual.
+
+paste_over_pending_yank_in_empty_value reproduces the panic at the same
+line. The paste itself reads the clipboard, which isn't available in
+unit tests, so the test performs paste's first step directly. Both key
+sequences crash yazi 26.9.1 and no longer crash it with this change
+applied. The bug was found by fuzzing yazi with Bombadil.
+---
+ yazi-widgets/src/input/input.rs | 33 +++++++++++++++++++++++++++++++--
+ yazi-widgets/src/input/snap.rs  |  9 +++++++++
+ 2 files changed, 40 insertions(+), 2 deletions(-)
+
+diff --git a/yazi-widgets/src/input/input.rs b/yazi-widgets/src/input/input.rs
+index 35125e9c..44d057b4 100644
+--- a/yazi-widgets/src/input/input.rs
++++ b/yazi-widgets/src/input/input.rs
+@@ -63,7 +63,7 @@ impl Input {
+ 				snap.cursor = cursor;
+ 			}
+ 			InputOp::Delete(cut, insert, _) => {
+-				let range = snap.op.range(cursor, include).unwrap();
++				let range = snap.op_range(cursor, include);
+ 				let Range { start, end } = snap.idx(range.start)..snap.idx(range.end);
+ 
+ 				let drain = snap.value.drain(start.unwrap()..end.unwrap()).collect::<String>();
+@@ -76,7 +76,7 @@ impl Input {
+ 				snap.cursor = range.start;
+ 			}
+ 			InputOp::Yank(_) => {
+-				let range = snap.op.range(cursor, include).unwrap();
++				let range = snap.op_range(cursor, include);
+ 				let Range { start, end } = snap.idx(range.start)..snap.idx(range.end);
+ 				let yanked = &snap.value[start.unwrap()..end.unwrap()];
+ 
+@@ -178,3 +178,32 @@ impl Input {
+ 
+ 	pub(crate) fn snap_mut(&mut self) -> &mut InputSnap { self.snaps.current_mut() }
+ }
++
++#[cfg(test)]
++mod tests {
++	use super::*;
++
++	// `paste` first turns a pending operation into a delete over it, then
++	// inserts the clipboard. The clipboard isn't available in unit tests, so
++	// this performs that first step the same way `paste` does.
++	fn paste_over_pending_op(input: &mut Input) {
++		if let Some(start) = input.snap().op.start() {
++			input.snap_mut().op = InputOp::Delete(false, false, start);
++			input.handle_op(input.snap().cursor, true);
++		}
++	}
++
++	// `/`, Esc, `y`, `p`: a yank waiting for its motion, then a paste, in an
++	// empty input.
++	#[test]
++	fn paste_over_pending_yank_in_empty_value() {
++		let mut input = Input::new(InputOpt::default()).unwrap();
++		input.escape(()).unwrap();
++		input.yank(()).unwrap();
++		paste_over_pending_op(&mut input);
++
++		assert_eq!(input.value(), "");
++		assert_eq!(input.snap().cursor, 0);
++		assert_eq!(input.snap().op, InputOp::None);
++	}
++}
+diff --git a/yazi-widgets/src/input/snap.rs b/yazi-widgets/src/input/snap.rs
+index 619c4cb1..d4bf6b12 100644
+--- a/yazi-widgets/src/input/snap.rs
++++ b/yazi-widgets/src/input/snap.rs
+@@ -65,6 +65,15 @@ impl InputSnap {
+ 			.or_else(|| if n == self.count() { Some(self.len()) } else { None })
+ 	}
+ 
++	// The range the pending op covers, clamped to the value. The inclusive end
++	// can lie past the value, e.g. when pasting over a yank that is still
++	// waiting for its motion in an empty input.
++	pub(super) fn op_range(&self, cursor: usize, include: bool) -> Range<usize> {
++		let count = self.count();
++		let range = self.op.range(cursor, include).unwrap_or(cursor..cursor);
++		range.start.min(count)..range.end.min(count)
++	}
++
+ 	pub(super) fn slice(&self, range: Range<usize>) -> &str {
+ 		let (s, e) = (self.idx(range.start), self.idx(range.end));
+ 		&self.value[s.unwrap()..e.unwrap()]
+-- 
+2.54.0
+
