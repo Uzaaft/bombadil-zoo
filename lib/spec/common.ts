@@ -67,6 +67,20 @@ export function keys(...literals: string[]): ActionGenerator<ActionTemplate> {
   return typeFromSet(CharSet.fromLiterals(...literals));
 }
 
+// Types one printable ASCII character per step, except the given ones. At
+// about 100 actions a second, random typing that includes a target's quit
+// key ends most runs within a second or two.
+export function typePrintableExcept(
+  excluded: string,
+): ActionGenerator<ActionTemplate> {
+  const literals: string[] = [];
+  for (let code = 0x20; code <= 0x7e; code++) {
+    const char = String.fromCharCode(code);
+    if (!excluded.includes(char)) literals.push(char);
+  }
+  return keys(...literals);
+}
+
 export function resize(
   columns: [number, number],
   rows: [number, number],
