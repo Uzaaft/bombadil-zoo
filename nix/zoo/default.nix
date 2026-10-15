@@ -1,0 +1,24 @@
+# The harness library, passed to every harness as `zoo`.
+#
+# A harness describes how to launch one instance of its target and hands
+# that to a runner:
+#
+#   zoo.sandboxed  the campaign runs as a Nix build (sandboxed.nix)
+#   zoo.host       the campaign runs on your machine (host.nix)
+#
+# `launch <run dir>` starts one target process. It writes the target's stderr
+# to <run dir>/stderr/<pid> and to the terminal, which zoo.teeStderr does, so
+# the spec sees crash messages. zoo.launchInCopy builds such a script for
+# targets that work on a copy of some seed state. Either runner gives the
+# harness fuzz-<name> and reproduce-<name> apps that write results to
+# .state/<name>/.
+{ pkgs, bombadil }:
+let
+  scripts = import ./scripts.nix { inherit pkgs; };
+  runner = path: import path { inherit pkgs bombadil scripts; };
+in
+{
+  sandboxed = runner ./sandboxed.nix;
+  host = runner ./host.nix;
+  inherit (scripts) teeStderr launchInCopy defaultCrashLines;
+}

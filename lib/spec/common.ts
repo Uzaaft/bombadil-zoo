@@ -15,11 +15,13 @@ export const screen = extract((state) => {
     rows.push(state.grid.rowText(i));
   }
   return rows.join("\n");
-});
+}).named("screen");
 
-const size = extract((state) => state.grid.size);
+const size = extract((state) => state.grid.size).named("size");
 
-export const exited = extract((state) => state.exitStatus !== null);
+export const exited = extract((state) => state.exitStatus !== null).named(
+  "exited",
+);
 
 // Fails once the screen shows text matching `crash`. Harnesses copy the
 // target's stderr to the terminal, so a panic message shows up here.

@@ -17,66 +17,44 @@
   outputs =
     { nixpkgs, bombadil, ... }:
     let
-      inherit (nixpkgs) lib;
       systems = [
         "x86_64-linux"
         "aarch64-linux"
         "aarch64-darwin"
       ];
-      # Every directory under harnesses/ is a harness. Its default.nix takes
-      # { pkgs, bombadil, zoo } and returns packages, apps, a devShell and
-      # optionally checks and legacyPackages, mostly via zoo.sandboxed or
-      # zoo.host from lib/.
-      harnessNames = builtins.attrNames (
-        lib.filterAttrs (_: type: type == "directory") (builtins.readDir ./harnesses)
-      );
-      forAllSystems =
-        f:
-        lib.genAttrs systems (
-          system:
-          let
-            pkgs = nixpkgs.legacyPackages.${system};
-            bombadil' = bombadil.packages.${system};
-            zoo = import ./lib {
-              inherit pkgs;
-              bombadil = bombadil';
-            };
-          in
-          f {
+      perSystem = f: nixpkgs.lib.genAttrs systems (system: f (zooFor system));
+
+      zooFor =
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          bombadil' = bombadil.packages.${system};
+          zoo = import ./nix/zoo {
+            inherit pkgs;
+            bombadil = bombadil';
+          };
+        in
+        {
+          inherit pkgs;
+          bombadil = bombadil';
+          harnesses = import ./nix/harnesses.nix {
             inherit pkgs zoo;
             bombadil = bombadil';
-            harnesses = lib.genAttrs harnessNames (
-              name:
-              import ./harnesses/${name} {
-                inherit pkgs zoo;
-                bombadil = bombadil';
-              }
-            );
-          }
-        );
-
-      merge = attr: harnesses: lib.concatMapAttrs (_: h: h.${attr} or { }) harnesses;
+          };
+        };
     in
     {
-      packages = forAllSystems (
+      packages = perSystem (
         { bombadil, harnesses, ... }:
         {
-          bombadil = bombadil.default;
-          # Type definitions / runtime for `@antithesishq/bombadil/terminal` specs.
-          bombadil-npm = bombadil.npm-package;
           default = bombadil.default;
+          bombadil = bombadil.default;
+          bombadil-npm = bombadil.npm-package;
         }
-        // merge "packages" harnesses
+        // harnesses.packages
       );
 
-      # Things that can't be packages, e.g. the functions that build a
-      # campaign derivation per invocation.
-      legacyPackages = forAllSystems (
-        { harnesses, ... }:
-        lib.foldl' lib.recursiveUpdate { } (lib.mapAttrsToList (_: h: h.legacyPackages or { }) harnesses)
-      );
-
-      apps = forAllSystems (
+      apps = perSystem (
         { bombadil, harnesses, ... }:
         {
           default = {
@@ -84,92 +62,35 @@
             program = "${bombadil.default}/bin/bombadil";
           };
         }
-        // merge "apps" harnesses
+        // harnesses.apps
       );
 
-      # nix flake check: type-checks every spec, builds every harness's
-      # packages, and runs a short smoke campaign for sandboxed harnesses.
-      checks = forAllSystems (
+      # The functions that build a campaign derivation per invocation.
+      legacyPackages = perSystem ({ harnesses, ... }: harnesses.legacyPackages);
+
+      # nix flake check: type-checks the specs, builds every package and runs
+      # a short smoke campaign per sandboxed harness.
+      checks = perSystem (
         {
           pkgs,
           bombadil,
           harnesses,
-          ...
         }:
-        {
-          specs =
-            pkgs.runCommand "specs"
-              {
-                src = lib.fileset.toSource {
-                  root = ./.;
-                  fileset = lib.fileset.unions [
-                    ./tsconfig.json
-                    ./lib/spec
-                    (lib.fileset.fileFilter (f: f.name == "spec.ts") ./harnesses)
-                  ];
-                };
-              }
-              ''
-                cp -r $src/. . && chmod -R u+w .
-                mkdir -p node_modules/@antithesishq
-                ln -s ${bombadil.npm-package} node_modules/@antithesishq/bombadil
-                ${pkgs.typescript}/bin/tsc -p tsconfig.json
-                touch $out
-              '';
-        }
-        // merge "packages" harnesses
-        // merge "checks" harnesses
+        import ./nix/checks.nix { inherit pkgs bombadil; } // harnesses.packages // harnesses.checks
       );
 
-      devShells = forAllSystems (
+      devShells = perSystem (
         {
           pkgs,
           bombadil,
           harnesses,
-          ...
         }:
-        let
-          base = pkgs.mkShell {
-            packages = with pkgs; [
-              bombadil.default
-
-              # Writing specs.
-              bun
-              typescript
-              typescript-language-server
-              biome
-
-              nil
-              nixfmt
-            ];
-
-            # Exports rather than attributes, because mkShell's inputsFrom
-            # carries shellHooks over but not plain environment variables.
-            # The node_modules link lets editors resolve the bombadil types.
-            shellHook = ''
-              export BOMBADIL_NPM_PACKAGE="${bombadil.npm-package}"
-              mkdir -p node_modules/@antithesishq
-              ln -sfn "$BOMBADIL_NPM_PACKAGE" node_modules/@antithesishq/bombadil
-            '';
-          };
-        in
-        {
-          # Everything, for working across harnesses.
-          default = pkgs.mkShell {
-            inputsFrom = [ base ] ++ lib.mapAttrsToList (_: h: h.devShell) harnesses;
-          };
+        import ./nix/devshell.nix {
+          inherit pkgs bombadil;
+          inherit (harnesses) harnesses;
         }
-        // lib.mapAttrs (
-          _: h:
-          pkgs.mkShell {
-            inputsFrom = [
-              base
-              h.devShell
-            ];
-          }
-        ) harnesses
       );
 
-      formatter = forAllSystems ({ pkgs, ... }: pkgs.nixfmt);
+      formatter = perSystem ({ pkgs, ... }: pkgs.nixfmt);
     };
 }

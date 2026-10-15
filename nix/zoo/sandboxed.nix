@@ -1,0 +1,167 @@
+# A harness whose campaigns run as Nix builds: no network, no access to your
+# home directory. Use it for targets that can run commands or change files.
+#
+#   name        the harness directory under harnesses/
+#   launch      script: launch <run dir>
+#   inputs      extra tools on PATH during the campaign
+#   crashLines  regex for crash lines on stderr
+#   smokeArgs   bombadil arguments for the smoke check
+{
+  pkgs,
+  bombadil,
+  scripts,
+}:
+{
+  name,
+  launch,
+  inputs ? [ ],
+  crashLines ? scripts.defaultCrashLines,
+  smokeArgs ? [
+    "--time-limit-fuzz"
+    "20s"
+    "--time-limit-run"
+    "5s"
+  ],
+}:
+let
+  inherit (pkgs) lib;
+  inherit (scripts) finalize report specIn;
+
+  env = ''
+    export HOME="$TMPDIR/home"
+    mkdir -p "$HOME" "$out/stderr"
+  '';
+
+  finish = ''
+    echo "$status" > "$out/status"
+    ${finalize}/bin/zoo-finalize "$out" ${lib.escapeShellArg crashLines}
+  '';
+
+  # One campaign. seed makes every invocation a distinct derivation. The
+  # build succeeds whatever the campaign finds, so the results survive;
+  # bombadil's own exit status is kept in `status`.
+  run =
+    {
+      seed ? "0",
+      args ? [ ],
+    }:
+    let
+      specTree = scripts.specTreeOf name;
+    in
+    pkgs.runCommand "${name}-campaign-${seed}" { nativeBuildInputs = inputs; } ''
+      ${env}
+      cp -r ${specTree} "$out/spec"
+      status=0
+      ${bombadil.default}/bin/bombadil terminal fuzz \
+        --specification ${specIn name specTree} \
+        --output-path "$out" \
+        ${lib.escapeShellArgs args} \
+        -- ${launch} "$out" > "$out/bombadil.log" 2>&1 || status=$?
+      ${finish}
+    '';
+
+  # Replays a trace in the sandbox. Traces can contain anything the fuzzer
+  # typed, so they never run on the host. specTree is the spec the trace was
+  # recorded with, which may differ from the current one.
+  reproduce =
+    {
+      trace,
+      seed ? "0",
+      specTree ? scripts.specTreeOf name,
+    }:
+    pkgs.runCommand "${name}-reproduce-${seed}" { nativeBuildInputs = inputs; } ''
+      ${env}
+      set -- ${trace} "$TMPDIR/trace.jsonl"
+      ${scripts.unpackTrace}
+      status=0
+      ${bombadil.default}/bin/bombadil terminal test \
+        --specification ${specIn name specTree} \
+        --reproduce "$TMPDIR/trace.jsonl" \
+        --output-path "$out/run" \
+        -- ${launch} "$out" > "$out/bombadil.log" 2>&1 || status=$?
+      ${finish}
+    '';
+
+  # An app that builds a campaign or replay from the working tree's flake and
+  # copies the result into .state. Plain nix from PATH on purpose: the
+  # client should match the system's Nix daemon.
+  app =
+    kind: build:
+    pkgs.writeShellApplication {
+      name = "${kind}-${name}";
+      runtimeInputs = [
+        pkgs.coreutils
+        pkgs.jq
+      ];
+      text = ''
+        ${scripts.findRoot}
+        ts="$(date +%Y%m%d-%H%M%S)"
+        dest="$root/.state/${name}/${if kind == "fuzz" then "runs" else "reproductions"}/$ts"
+        campaigns="(builtins.getFlake \"git+file://$root\").legacyPackages.${pkgs.stdenv.hostPlatform.system}.campaigns.${name}"
+
+        echo "${kind}-${name}: building in the Nix sandbox" >&2
+        ${build}
+
+        mkdir -p "$dest"
+        cp -r "$out"/. "$dest"
+        chmod -R u+w "$dest"
+        ${report}/bin/zoo-report "$dest" "${kind}-${name}"
+      '';
+    };
+
+  fuzz = app "fuzz" ''
+    args="$(jq -nc '$ARGS.positional' --args -- "$@")"
+    out="$(nix build --impure --no-link --print-out-paths -L \
+      --argstr seed "$ts" --argstr args "$args" \
+      --expr "{ seed, args }: $campaigns.run { inherit seed; args = builtins.fromJSON args; }")"
+  '';
+
+  replay = app "reproduce" ''
+    if [ $# -ne 1 ]; then
+      echo "usage: reproduce-${name} <trace.jsonl or trace.jsonl.zst>" >&2
+      exit 1
+    fi
+    trace="$(realpath "$1")"
+    set -- "$trace"
+    ${scripts.findSnapshot}
+    if [ -n "$snapshot" ]; then
+      echo "reproduce-${name}: using the campaign's spec in $snapshot" >&2
+    else
+      echo "reproduce-${name}: no spec snapshot, using the current spec" >&2
+    fi
+    out="$(nix build --impure --no-link --print-out-paths -L \
+      --argstr seed "$ts" --argstr trace "$trace" --argstr snapshot "$snapshot" \
+      --expr "{ seed, trace, snapshot }: $campaigns.reproduce ({
+        inherit seed;
+        trace = builtins.path { path = trace; name = baseNameOf trace; };
+      } // (if snapshot == \"\" then { } else {
+        specTree = builtins.path { path = snapshot; name = \"spec\"; };
+      }))")"
+  '';
+
+  # Proves the spec loads and the target starts in the sandbox. Fails only if
+  # bombadil itself errors; violations are fine here.
+  smoke = pkgs.runCommand "${name}-smoke" { } ''
+    campaign=${
+      run {
+        seed = "smoke";
+        args = smokeArgs;
+      }
+    }
+    status="$(cat "$campaign/status")"
+    if [ "$status" != 0 ] && [ "$status" != 2 ]; then
+      echo "bombadil exited with $status:" >&2
+      tail -20 "$campaign/bombadil.log" >&2
+      exit 1
+    fi
+    touch "$out"
+  '';
+in
+{
+  apps = {
+    "fuzz-${name}" = scripts.app fuzz;
+    "reproduce-${name}" = scripts.app replay;
+  };
+  legacyPackages.campaigns.${name} = { inherit run reproduce; };
+  checks."smoke-${name}" = smoke;
+}
