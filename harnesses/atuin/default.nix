@@ -12,11 +12,17 @@ let
   atuin = "${pkgs.atuin}/bin/atuin";
 
   # No sync, no update check and no daemon: everything stays local.
+  #
+  # inline_height = 0 keeps atuin fullscreen. By default, terminals taller
+  # than 40 rows get an inline viewport, which asks the terminal for the
+  # cursor position at startup and gives up with an error after 2s. Under
+  # the fuzzer's typing that sometimes timed out, and the replay passed.
   config = pkgs.writeText "atuin-config.toml" ''
     auto_sync = false
     update_check = false
     sync_address = "http://127.0.0.1:9"
     enter_accept = false
+    inline_height = 0
     [daemon]
     enabled = false
   '';
@@ -55,12 +61,27 @@ let
   # atuin exits after every selection or Esc. Restart it while it exits
   # cleanly, so a run keeps fuzzing; any other exit ends the run, so the
   # spec still sees crashes.
+  #
+  # Each restart takes the next of four setups, so a run also reaches the
+  # vim keymaps and the inverted and compact layouts, which a single config
+  # never shows. --keymap-mode only applies because the config leaves
+  # keymap_mode at auto.
   search = pkgs.writeShellScript "atuin-search-loop" ''
-    # Keys that arrive between two instances would otherwise be echoed by
-    # the terminal, and a multi-byte character split across reads shows up
-    # as U+FFFD, which noReplacementChars flagged.
-    ${pkgs.coreutils}/bin/stty -echo
-    while ${atuin} search -i; do :; done
+    # Keys that arrive between two instances reach the terminal driver, not
+    # atuin. With echo on, a multi-byte character split across reads showed
+    # up as U+FFFD, which noReplacementChars flagged; with signals and line
+    # editing on, Ctrl+C would end the loop and Ctrl+S stop all output.
+    ${pkgs.coreutils}/bin/stty -echo -icanon -isig -ixon -iexten
+    i=0
+    while :; do
+      case $((i % 4)) in
+        0) ${atuin} search -i --keymap-mode emacs ;;
+        1) ${atuin} search -i --keymap-mode vim-insert ;;
+        2) ATUIN_INVERT=true ${atuin} search -i --keymap-mode vim-normal ;;
+        3) ATUIN_STYLE=compact ${atuin} search -i --keymap-mode emacs ;;
+      esac || exit
+      i=$((i + 1))
+    done
   '';
 
   launch = zoo.launchInCopy {
