@@ -20,7 +20,13 @@ let
   launch = zoo.launchInCopy {
     name = "superfile";
     seed = zoo.seeds.fileTree;
-    prepare = zoo.seeds.fileTreePrepare;
+    # On first use superfile opens an intro modal that swallows keys until
+    # it's dismissed, and every run has a fresh home directory. Mark the
+    # intro as seen, so runs start in the file panel.
+    prepare = zoo.seeds.fileTreePrepare + ''
+      mkdir -p .local/share/superfile
+      touch .local/share/superfile/firstUseCheck
+    '';
     command = "${pkgs.superfile}/bin/superfile --config-file ${config} .";
     env = {
       HOME = ''"$work"'';
