@@ -29,6 +29,25 @@ export function noCrashText(crash: RegExp): Formula {
   return always(() => !crash.test(screen.current ?? ""));
 }
 
+// The target starts and shows something from its seed, e.g. a file name,
+// within 10 seconds. Without this, a target that fails to start can look
+// like a clean campaign.
+export function startsShowing(text: RegExp): Formula {
+  return eventually(() => text.test(screen.current ?? "")).within(
+    10,
+    "seconds",
+  );
+}
+
+const exitSignal = extract(
+  (state) => state.exitStatus?.signal ?? null,
+).named("exitSignal");
+
+// The target never dies from a signal, e.g. SIGSEGV or SIGABRT. Useful for
+// targets that exit with a nonzero code on purpose, where exitSuccess would
+// flag ordinary use, and for C programs, which print no panic message.
+export const noFatalSignal: Formula = always(() => exitSignal.current == null);
+
 // The screen may blank during a redraw, but never stays blank while the
 // target runs. Quitting is fine; the screen is empty after that.
 export const neverStuckBlank: Formula = always(
