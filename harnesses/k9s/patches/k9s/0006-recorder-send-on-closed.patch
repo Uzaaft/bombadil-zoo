@@ -1,7 +1,8 @@
-From 24289476161bfad6d875477773ddf20e1dec2f42 Mon Sep 17 00:00:00 2001
+From dc21b595b044a827b442c9c50f9e28800d313af1 Mon Sep 17 00:00:00 2001
 From: Uzair Aftab <git@uzaaft.me>
 Date: Mon, 12 Oct 2026 12:27:33 +0200
-Subject: [PATCH] fix(dao): keep metric watch channels owned by their watcher
+Subject: [PATCH 6/7] fix(dao): keep metric watch channels owned by their
+ watcher
 
 Switching views quickly could crash k9s with "panic: send on closed
 channel" in Recorder.dispatchSeries. Every Watch call shares one

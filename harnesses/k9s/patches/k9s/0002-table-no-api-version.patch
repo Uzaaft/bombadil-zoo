@@ -1,7 +1,7 @@
-From 721076396cffb19dff08faa40be31d8caf893671 Mon Sep 17 00:00:00 2001
+From a63c1d54db05474db0a3f18913def4214a69533b Mon Sep 17 00:00:00 2001
 From: Uzair Aftab <git@uzaaft.me>
 Date: Mon, 12 Oct 2026 12:13:21 +0200
-Subject: [PATCH] fix(dao): return an error for resources without an API
+Subject: [PATCH 2/7] fix(dao): return an error for resources without an API
  version
 
 Opening the xrays entry from the aliases view (ctrl-a, select xrays,

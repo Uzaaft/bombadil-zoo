@@ -1,7 +1,8 @@
-From d6def939bd03b4a96174368afefae3a5fa6d959d Mon Sep 17 00:00:00 2001
+From d9a6c288e2a3bdc276ce662062f056b225ddf232 Mon Sep 17 00:00:00 2001
 From: Uzair Aftab <git@uzaaft.me>
 Date: Mon, 12 Oct 2026 12:20:04 +0200
-Subject: [PATCH] fix(view): read aliases under lock when suggesting commands
+Subject: [PATCH 4/7] fix(view): read aliases under lock when suggesting
+ commands
 
 Typing in the command prompt could crash k9s with "fatal error:
 concurrent map iteration and map write". suggestCommand ranged over
@@ -85,7 +86,7 @@ index afdeddca..d92e5904 100644
 +	assert.Len(t, a.Keys(), 1_001)
 +}
 diff --git a/internal/view/app.go b/internal/view/app.go
-index fdfc7ab8..52327844 100644
+index c11142f1..ef971fab 100644
 --- a/internal/view/app.go
 +++ b/internal/view/app.go
 @@ -7,7 +7,6 @@ import (

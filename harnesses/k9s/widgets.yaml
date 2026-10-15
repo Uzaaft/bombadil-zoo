@@ -1,0 +1,16 @@
+# Custom resources, applied once the Widget CRD from cluster.yaml is
+# established.
+apiVersion: fuzz.example.com/v1
+kind: Widget
+metadata: { name: small, namespace: fuzz }
+spec: { size: small }
+---
+apiVersion: fuzz.example.com/v1
+kind: Widget
+metadata: { name: huge, namespace: fuzz }
+spec: { size: "ünïcödé huge ─── 日本語", nested: { deep: { deeper: [1, 2, 3] } } }
+---
+apiVersion: fuzz.example.com/v1
+kind: Widget
+metadata: { name: no-size, namespace: fuzz }
+spec: {}

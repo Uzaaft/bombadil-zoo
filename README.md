@@ -39,14 +39,25 @@ which is why every campaign keeps a copy.
 ## Layout
 
 ```
-flake.nix               collects every harness under harnesses/
-lib/default.nix         the runners, trace pruning and reports
+flake.nix               inputs and wiring
+nix/
+  harnesses.nix         imports every harness under harnesses/
+  zoo/                  the library harnesses get as `zoo`
+    sandboxed.nix       runner: campaigns as Nix builds
+    host.nix            runner: campaigns on your machine
+    scripts.nix         pruning, reports, launchInCopy
+  checks.nix            spec type-checking
+  devshell.nix          development shells
 lib/spec/common.ts      helpers shared by the specs
 harnesses/<name>/
   default.nix           how to build and launch the target
   spec.ts               properties and actions
   patches/              fixes carried while they're pending upstream
 ```
+
+The k9s harness builds k9s `master` at a pinned revision, so its patches
+are the fixes not merged yet. Drop a patch when its fix lands and bump the
+revision. The yazi harness patches the release in nixpkgs.
 
 ## Adding a harness
 
@@ -68,8 +79,12 @@ starts one instance of the target, and hands it to a runner:
 `launch` is called as `launch <run dir>`. It should give every run a fresh
 copy of any state the target changes, and send stderr to
 `<run dir>/stderr/<pid>` and to the terminal with `${zoo.teeStderr}`, so the
-spec sees crash messages on screen. Add `packages` for the target build and
-a `devShell` with its tools by merging them into the runner's result.
+spec sees crash messages on screen. For targets that work on files,
+`zoo.launchInCopy { name, seed, command, prepare, env }` does all of that:
+it starts `command` in a fresh copy of the `seed` derivation, after running
+`prepare` there for entries a store path can't hold, like FIFOs. Add
+`packages` for the target build and a `devShell` with its tools by merging
+them into the runner's result.
 
 `spec.ts` uses `lib/spec/common.ts`: `noCrashText` for the target's crash
 messages, `neverStuckBlank`, `keys` and `resize` for actions, and

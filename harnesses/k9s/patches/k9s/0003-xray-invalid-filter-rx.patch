@@ -1,7 +1,7 @@
-From 1b256770d39aa5d543799117a99800ca999ce6f3 Mon Sep 17 00:00:00 2001
+From 661a611a038b996498b8f7e76ba8a5a553703687 Mon Sep 17 00:00:00 2001
 From: Uzair Aftab <git@uzaaft.me>
 Date: Mon, 12 Oct 2026 12:14:12 +0200
-Subject: [PATCH] fix(xray): don't panic on an invalid filter regexp
+Subject: [PATCH 3/7] fix(xray): don't panic on an invalid filter regexp
 
 Typing a filter into the Xray view that isn't a valid regular
 expression, e.g. "/+foo" or "/?:cm", crashed k9s. rxFilter,

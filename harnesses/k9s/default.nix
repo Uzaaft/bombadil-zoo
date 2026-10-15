@@ -1,15 +1,15 @@
 # Fuzz harness for k9s, the Kubernetes TUI.
 #
 # k9s needs a cluster, so it runs on the host against a throwaway kind
-# cluster, with all kube and k9s state under .state/k9s and --readonly so it
-# can't change the cluster.
+# cluster loaded with fixtures (cluster.yaml), with all kube and k9s state
+# under .state/k9s and --readonly so it can't change the cluster.
 {
   pkgs,
   zoo,
   ...
 }:
 let
-  # The tview version k9s 0.51.0 requires, with our fixes applied.
+  # The tview version k9s requires, with our fix applied.
   tview = pkgs.applyPatches {
     name = "tview-patched";
     src = pkgs.fetchFromGitHub {
@@ -21,18 +21,26 @@ let
     patches = [ ./patches/tview/0001-textview-wrap-display-width.patch ];
   };
 
-  # k9s with our fixes that are pending upstream or unreleased, so fuzzing
-  # doesn't keep rediscovering the same crashes.
+  # k9s master, which upstream works on, with our fixes that aren't merged
+  # yet, so fuzzing doesn't keep rediscovering the same crashes. Drop a
+  # patch once its fix lands, and bump rev to pick it up.
   k9s = pkgs.k9s.overrideAttrs (old: {
-    patches = (old.patches or [ ]) ++ [
-      ./patches/k9s/0001-xray-nil-root.patch
-      ./patches/k9s/0002-cmdbuff-listener-race.patch
-      ./patches/k9s/0003-table-no-api-version.patch
-      ./patches/k9s/0004-xray-invalid-filter-rx.patch
-      ./patches/k9s/0005-suggest-alias-race.patch
-      ./patches/k9s/0006-xray-filter-before-load.patch
-      ./patches/k9s/0007-recorder-send-on-closed.patch
-      ./patches/k9s/0008-table-scheme-race.patch
+    version = "0.51.0-unstable-2026-10-14";
+    src = pkgs.fetchFromGitHub {
+      owner = "derailed";
+      repo = "k9s";
+      rev = "24a0dfa2e4078bed6aa1b4896a602aea70500779";
+      hash = "sha256-c0hsQVWA+g6t+LDU79Bfd0minA6mO1/QKZAjz7t2gGM=";
+    };
+    vendorHash = "sha256-o3okhVFaJPsspmfZ6u5P0kEjUqsrwCfQnzDvaBQfKq4=";
+    patches = [
+      ./patches/k9s/0001-cmdbuff-listener-race.patch
+      ./patches/k9s/0002-table-no-api-version.patch
+      ./patches/k9s/0003-xray-invalid-filter-rx.patch
+      ./patches/k9s/0004-suggest-alias-race.patch
+      ./patches/k9s/0005-xray-filter-before-load.patch
+      ./patches/k9s/0006-recorder-send-on-closed.patch
+      ./patches/k9s/0007-table-scheme-race.patch
     ];
     # Build against the patched tview. A directory replace doesn't change
     # the module set, so vendorHash stays the same.
@@ -42,6 +50,9 @@ let
       echo 'replace github.com/derailed/tview => ../tview' >> go.mod
     '';
   });
+
+  kubectl = "${pkgs.kubectl}/bin/kubectl";
+  kind = "${pkgs.kind}/bin/kind";
 
   # Points kube and k9s at state under $state, so k9s can never reach a
   # real cluster or your own config.
@@ -64,10 +75,15 @@ zoo.host {
     # The cluster is throwaway. If its API server doesn't answer (e.g. the
     # node container stopped on reboot), recreate it rather than fuzz k9s
     # against a dead connection.
-    if ! ${pkgs.kubectl}/bin/kubectl --request-timeout=5s get --raw /readyz >/dev/null 2>&1; then
-      ${pkgs.kind}/bin/kind delete cluster --name fuzz >/dev/null 2>&1 || true
-      ${pkgs.kind}/bin/kind create cluster --name fuzz
+    if ! ${kubectl} --request-timeout=5s get --raw /readyz >/dev/null 2>&1; then
+      ${kind} delete cluster --name fuzz >/dev/null 2>&1 || true
+      ${kind} create cluster --name fuzz
     fi
+    # Fixtures are idempotent, so applying them every time is cheap and
+    # restores anything a previous campaign's cron jobs changed.
+    ${kubectl} apply -f ${./cluster.yaml} >/dev/null
+    ${kubectl} wait --for condition=established --timeout=60s crd/widgets.fuzz.example.com >/dev/null
+    ${kubectl} apply -f ${./widgets.yaml} >/dev/null
   '';
 }
 // {
