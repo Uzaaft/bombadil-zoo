@@ -12,7 +12,8 @@ let
     name = "ncdu";
     seed = zoo.seeds.fileTree;
     prepare = zoo.seeds.fileTreePrepare;
-    command = "${pkgs.ncdu}/bin/ncdu --color dark .";
+    # --extended stores mtimes, so the spec can sort and show them (m, M).
+    command = "${pkgs.ncdu}/bin/ncdu --extended --color dark .";
     env = {
       HOME = ''"$work"'';
       XDG_CONFIG_HOME = ''"$work/.config"'';
