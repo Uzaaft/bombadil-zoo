@@ -72,10 +72,16 @@ zoo.host {
   inherit launch;
   setup = ''
     ${isolate}
-    # The cluster is throwaway. If its API server doesn't answer (e.g. the
-    # node container stopped on reboot), recreate it rather than fuzz k9s
+    # The cluster is throwaway and shared by every checkout, e.g. worktrees
+    # fuzzing in parallel. Without a working kubeconfig, first try the
+    # existing cluster's. Only if its API server doesn't answer either (e.g.
+    # the node container stopped on reboot), recreate it rather than fuzz k9s
     # against a dead connection.
-    if ! ${kubectl} --request-timeout=5s get --raw /readyz >/dev/null 2>&1; then
+    ready() { ${kubectl} --request-timeout=5s get --raw /readyz >/dev/null 2>&1; }
+    if ! ready && ${kind} get clusters 2>/dev/null | grep -qx fuzz; then
+      ${kind} export kubeconfig --name fuzz >/dev/null 2>&1 || true
+    fi
+    if ! ready; then
       ${kind} delete cluster --name fuzz >/dev/null 2>&1 || true
       ${kind} create cluster --name fuzz
     fi
