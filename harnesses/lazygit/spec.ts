@@ -13,6 +13,7 @@ import {
   noCrashText,
   pauseAfterEscape,
   resize,
+  startsShowing,
 } from "../../lib/spec/common.ts";
 export {
   exitSuccess,
@@ -28,6 +29,10 @@ export { neverStuckBlank } from "../../lib/spec/common.ts";
 export const noPanic = noCrashText(
   /panic: |fatal error: |goroutine \d+ \[|An error occurred! Please create an issue/,
 );
+
+// lazygit's panels are up. They fill in asynchronously, so the first frame
+// has no repository data yet.
+export const startsUp = startsShowing(/\[1\]─Status/);
 
 // Actions
 

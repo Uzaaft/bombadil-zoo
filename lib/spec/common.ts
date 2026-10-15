@@ -29,12 +29,18 @@ export function noCrashText(crash: RegExp): Formula {
   return always(() => !crash.test(screen.current ?? ""));
 }
 
-// The target starts and shows something from its seed, e.g. a file name,
-// within 10 seconds. Without this, a target that fails to start can look
-// like a clean campaign.
+// The target starts and shows `text` within 5 seconds, or exits by then,
+// e.g. because the fuzzer quit it. Without this, a target that fails to
+// start can look like a clean campaign. Match something in the target's
+// first frame: early input can move away before data that loads later
+// appears. The bound has to be well under bombadil's run length (10s by
+// default), because a run that ends before the deadline leaves the property
+// undecided, and an undecided property isn't reported.
 export function startsShowing(text: RegExp): Formula {
-  return eventually(() => text.test(screen.current ?? "")).within(
-    10,
+  return eventually(
+    () => !!exited.current || text.test(screen.current ?? ""),
+  ).within(
+    5,
     "seconds",
   );
 }

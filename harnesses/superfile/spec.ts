@@ -25,8 +25,9 @@ export { neverStuckBlank } from "../../lib/spec/common.ts";
 // Go panics and runtime fatal errors print a trace before superfile exits.
 export const noPanic = noCrashText(/panic: |fatal error: |goroutine \d+ \[/);
 
-// The file panel lists the seed tree.
-export const startsUp = startsShowing(/one-megabyte\.bin/);
+// superfile is up. Its file panel fills in asynchronously, so the first
+// frame only has the sidebar.
+export const startsUp = startsShowing(/superfile/);
 
 // Actions
 
