@@ -1,13 +1,17 @@
 // Bombadil specification for btop.
 //
-// No random typing and no signal keys (k, t, i, s): in the sandbox, the
-// processes btop shows include bombadil and its workers.
+// btop runs in a PID namespace of its own, so its signals only reach
+// itself. As PID 1 it ignores SIGKILL, but it handles SIGTERM and SIGINT
+// and quits, so terminate (t), interrupt (i) and the signals menu (s),
+// which defaults to SIGTERM, are left out, as is q. Random typing leaves
+// out the same letters.
 import { weighted } from "@antithesishq/bombadil/terminal";
 import {
   keys,
   pauseAfterEscape,
   resize,
   startsShowing,
+  typePrintableExcept,
 } from "../../lib/spec/common.ts";
 export {
   exitSuccess,
@@ -34,17 +38,20 @@ const views = keys(
   "F", "M", "h",
 );
 
-// Filtering, as whole sequences that open the field first: typed outside
-// it, letters are shortcuts, and s opens the signals menu. The text avoids
-// k, t, i and s for the same reason.
+// Filtering, as whole sequences that open the field first.
 const filterText = keys("/bomb\r", "/yaz\r", "/zz\r", "/b\x7f\r", "/\x1b");
+
+// Killing the selected process, confirming or cancelling. Only btop
+// itself can be selected, and it ignores SIGKILL as PID 1.
+const signals = keys("k", "k\r", "k\x1b");
 
 export const drive = pauseAfterEscape(
   weighted([
     [35, navigate],
     [35, views],
     [10, filterText],
+    [8, signals],
+    [6, typePrintableExcept("qtis")],
     [5, resize([20, 200], [5, 60])],
-    [1, keys("q")],
   ]),
 );
