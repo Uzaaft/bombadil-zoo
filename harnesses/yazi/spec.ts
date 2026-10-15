@@ -14,6 +14,7 @@ import {
   noCrashText,
   pauseAfterEscape,
   resize,
+  startsShowing,
 } from "../../lib/spec/common.ts";
 export {
   exitSuccess,
@@ -25,6 +26,9 @@ export { neverStuckBlank } from "../../lib/spec/common.ts";
 
 // A Rust panic prints "panicked at" before yazi exits.
 export const noPanic = noCrashText(/panicked at/);
+
+// yazi is up: its status bar shows the mode from the first frame.
+export const startsUp = startsShowing(/\b(NOR|SEL|UNS)\b/);
 
 // The bottom row of the main view holds the status bar, which starts with
 // the mode: NOR, SEL (visual select) or UNS (visual unset). Overlays like
