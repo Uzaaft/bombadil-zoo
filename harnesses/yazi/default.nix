@@ -19,37 +19,62 @@ let
     });
   };
 
-  # A small tree with the kinds of entries file managers trip over.
+  # A tree with the kinds of entries file managers trip over.
   seed = pkgs.runCommand "yazi-seed" { } ''
-    mkdir -p $out/docs/nested/deeper $out/empty $out/.hidden-dir
-    for i in $(seq 1 40); do echo "file $i" > $out/docs/file-$i.txt; done
-    echo "deep" > $out/docs/nested/deeper/leaf.md
-    printf 'héllo wörld\n' > "$out/ünïcödé näme.txt"
-    printf '日本語\n' > "$out/日本語のファイル.txt"
-    echo "spaces" > "$out/name with  spaces.txt"
-    echo "dash" > "$out/-starts-with-dash"
-    echo "hidden" > $out/.hidden-file
-    head -c 1048576 /dev/zero > $out/one-megabyte.bin
-    printf '#!/bin/sh\necho hi\n' > $out/script.sh
-    chmod +x $out/script.sh
-    ln -s docs/file-1.txt $out/link-to-file
-    ln -s nowhere $out/dangling-link
-    ln -s docs $out/link-to-dir
+    mkdir -p $out && cd $out
+    mkdir -p docs/nested/deeper empty .hidden-dir many
+    for i in $(seq 1 40); do echo "file $i" > docs/file-$i.txt; done
+    echo "deep" > docs/nested/deeper/leaf.md
+    # Enough entries to scroll, sort and filter.
+    for i in $(seq 1 2000); do : > many/entry-$i; done
+
+    # Names: non-ASCII, wide characters, spaces, a leading dash, and a long
+    # one. Not control characters: yazi shows those as U+FFFD on purpose,
+    # which noReplacementChars would flag in every run.
+    printf 'héllo wörld\n' > "ünïcödé näme.txt"
+    printf '日本語\n' > "日本語のファイル.txt"
+    echo "spaces" > "name with  spaces.txt"
+    echo "dash" > ./-starts-with-dash
+    echo "long" > "$(printf 'x%.0s' $(seq 1 200)).txt"
+    echo "hidden" > .hidden-file
+
+    # Contents: binary, empty, executable, and something to preview.
+    head -c 1048576 /dev/zero > one-megabyte.bin
+    : > empty.txt
+    printf '#!/bin/sh\necho hi\n' > script.sh && chmod +x script.sh
+    printf '{"key": [1, 2, {"nested": true}]}\n' > data.json
+
+    # Links: to a file, to a directory, dangling, and a loop.
+    ln -s docs/file-1.txt link-to-file
+    ln -s docs link-to-dir
+    ln -s nowhere dangling-link
+    ln -s self-loop self-loop
   '';
 
-  launch = pkgs.writeShellScript "yazi-launch" ''
-    work="$(${pkgs.coreutils}/bin/mktemp -d)"
-    ${pkgs.coreutils}/bin/cp -r ${seed}/. "$work"
-    ${pkgs.coreutils}/bin/chmod -R u+w "$work"
-    cd "$work"
-    EDITOR=true exec ${yazi}/bin/yazi ${zoo.teeStderr}
-  '';
+  launch = zoo.launchInCopy {
+    name = "yazi";
+    inherit seed;
+    command = "${yazi}/bin/yazi";
+    # Entries a store path can't hold: a FIFO, which blocks anything that
+    # reads it, and a directory yazi may not enter.
+    prepare = ''
+      ${pkgs.coreutils}/bin/mkfifo pipe
+      mkdir locked && echo secret > locked/inside && chmod 000 locked
+    '';
+    env.EDITOR = "true";
+  };
 in
 zoo.sandboxed {
   name = "yazi";
   inherit launch;
-  # yazi detects MIME types with file(1).
-  inputs = [ pkgs.file ];
+  inputs = with pkgs; [
+    # MIME detection.
+    file
+    # Search (s, S) and the fzf jump (Z).
+    fd
+    ripgrep
+    fzf
+  ];
 }
 // {
   packages = {
