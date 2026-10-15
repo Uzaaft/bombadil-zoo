@@ -30,6 +30,13 @@ let
     disableStartupPopups: true
     gui:
       showRandomTip: false
+    # lazygit only takes $EDITOR when it names an editor it has a preset
+    # for, and otherwise runs vim, so set the commands themselves.
+    os:
+      edit: "true"
+      editAtLine: "true"
+      editAtLineAndWait: "true"
+      openDirInEditor: "true"
   '';
 
   # repo/ has history to browse and state to act on. remote.git is a bare
@@ -62,7 +69,27 @@ let
     ${git} merge -q --no-ff feature -m "merge feature"
     ${git} checkout -qb diverged HEAD~3
     echo "diverged" >> notes.txt && ${git} commit -qam "diverged work"
+    # Changes the same line as main, so merging or rebasing onto it stops
+    # in a conflict and lazygit's conflict view has something to resolve.
+    ${git} checkout -qb conflicting main
+    sed -i '1s/.*/conflicting first line/' notes.txt
+    ${git} commit -qam "conflict with main"
     ${git} checkout -q main
+    sed -i '1s/.*/main first line/' notes.txt
+    ${git} commit -qam "change the first line on main"
+
+    # A long file, committed, then edited in several far-apart places below,
+    # so the staging view has separate hunks and lines to pick.
+    seq 1 200 | sed 's/^/row /' > long.txt
+    ${git} add long.txt && ${git} commit -qm "add long.txt"
+
+    # A submodule, with its own history.
+    ${git} init -q --bare $out/sub.git
+    ${git} clone -q $out/sub.git $TMPDIR/sub
+    (cd $TMPDIR/sub && echo "sub" > sub.txt && ${git} add -A \
+      && ${git} commit -qm "sub commit" && ${git} push -q origin HEAD:main)
+    ${git} submodule add -q $out/sub.git sub
+    ${git} commit -qm "add a submodule"
 
     ${git} clone -q --bare . ../remote.git
     ${git} remote add origin ../remote.git
@@ -75,6 +102,7 @@ let
     echo "stashed" >> src-2.rs && ${git} stash -q
     echo "staged" >> src-3.rs && ${git} add src-3.rs
     echo "modified" >> src-4.rs
+    sed -i -e '10s/$/ edited/' -e '90s/.*/row 90 replaced/' -e '150d' -e '199a row new' long.txt
     echo "untracked" > untracked.txt
   '';
 
@@ -87,7 +115,11 @@ let
       LG_CONFIG_FILE = "${config}";
       XDG_CONFIG_HOME = ''"$work/.config"'';
       XDG_STATE_HOME = ''"$work/.state"'';
+      # Every way lazygit and git look for an editor, so edits return at
+      # once instead of falling back to vim, which isn't there.
       EDITOR = "true";
+      VISUAL = "true";
+      GIT_EDITOR = "true";
     };
   };
 in
@@ -96,6 +128,9 @@ zoo.sandboxed {
   inherit launch;
   # lazygit runs git from PATH.
   inputs = [ pkgs.git ];
+  # lazygit reports errors it doesn't expect through log.Fatalf, behind a
+  # timestamp, then exits.
+  crashLines = "An error occurred! Please create an issue|^panic: |^fatal error: ";
 }
 // {
   packages.lazygit-seed = seed;
