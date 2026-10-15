@@ -162,7 +162,9 @@ rec {
   #   prepare  shell run in the copy first, e.g. for entries a store path
   #            can't hold, like FIFOs or unreadable directories
   #   env      variables to export; values are shell words, so "$work"
-  #            refers to the copy
+  #            refers to the copy. LANG defaults to C.UTF-8: the sandbox
+  #            sets no locale, and without one targets fall back to ASCII,
+  #            or refuse to start, like btop.
   launchInCopy =
     {
       name,
@@ -177,7 +179,9 @@ rec {
       ${coreutils}/chmod -R u+w "$work"
       cd "$work"
       ${prepare}
-      ${lib.concatStrings (lib.mapAttrsToList (k: v: "export ${k}=${v}\n") env)}
+      ${lib.concatStrings (
+        lib.mapAttrsToList (k: v: "export ${k}=${v}\n") ({ LANG = "C.UTF-8"; } // env)
+      )}
       exec ${command} ${teeStderr}
     '';
 }
