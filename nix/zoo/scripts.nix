@@ -7,8 +7,8 @@ let
 in
 rec {
   # Matches the lines that identify a crash in stderr: Rust panics, Go panics
-  # and Go runtime fatal errors.
-  defaultCrashLines = "panicked at |^panic: |^fatal error: ";
+  # and runtime fatal errors, and Zig panics ("thread 18 panic: ...").
+  defaultCrashLines = "panicked at |^panic: |^fatal error: |^thread [0-9]+ panic: ";
 
   # The spec of harness `name` together with the shared helpers it imports
   # from lib/spec, laid out as in the repository. Campaigns copy this tree
@@ -70,7 +70,7 @@ rec {
       # The distinct crash messages, most frequent first.
       cat "$out"/stderr/* 2>/dev/null \
         | grep -E "$crash_lines" \
-        | sed -E 's/^thread .* panicked at /panicked at /' \
+        | sed -E -e 's/^thread .* panicked at /panicked at /' -e 's/^thread [0-9]+ panic: /panic: /' \
         | sort | uniq -c | sort -rn > "$out/crashes" || true
     '';
   };
@@ -156,6 +156,23 @@ rec {
   # messages.
   teeStderr = ''2> >(${coreutils}/tee "$1/stderr/$$" >&2)'';
 
+  # Runs its arguments after the first with the directory in $1 hidden
+  # behind an empty tmpfs, in user and mount namespaces of their own, as the
+  # original user. The run directory is the campaign's own output, which the
+  # build user can write. Without this, file managers walked up to it and
+  # deleted bombadil's log and traces mid-campaign, which made campaigns look
+  # clean.
+  hideRunDir = pkgs.writeShellScript "zoo-hide-run-dir" ''
+    export ZOO_UID="$(${coreutils}/id -u)" ZOO_GID="$(${coreutils}/id -g)"
+    exec ${pkgs.util-linux}/bin/unshare --user --map-root-user --mount \
+      ${pkgs.bash}/bin/bash -c '
+        ${pkgs.util-linux}/bin/mount -t tmpfs -o size=1m,mode=000 zoo-hidden "$1" || exit 70
+        shift
+        exec ${pkgs.util-linux}/bin/unshare --user \
+          --map-user="$ZOO_UID" --map-group="$ZOO_GID" -- "$@"
+      ' bash "$@"
+  '';
+
   # A launch script that starts `command` in a fresh, writable copy of
   # `seed`, so nothing one run changes leaks into the next.
   #
@@ -182,6 +199,6 @@ rec {
       ${lib.concatStrings (
         lib.mapAttrsToList (k: v: "export ${k}=${v}\n") ({ LANG = "C.UTF-8"; } // env)
       )}
-      exec ${command} ${teeStderr}
+      exec ${hideRunDir} "$1" ${command} ${teeStderr}
     '';
 }
