@@ -76,6 +76,56 @@ const ex = keys(
   ":", "/", "?", "q:",
 );
 
+// Ex commands that exercise Neovim's heavier machinery: quickfix and
+// vimgrep, substitutions with expressions and backreferences, folding
+// methods, spell checking, undo tree jumps, retab, commands over every
+// window or buffer, and autocommands that fire on later edits.
+const exDeep = keys(
+  ...[
+    "vimgrep /line/j **/*", "vimgrep /x/ big.txt", "copen", "cclose", "cnext",
+    "cprev", "cfirst", "clast", "lvimgrep /f/ %", "lopen", "colder", "cnewer",
+    "%s/\\(\\w\\+\\) \\(\\w\\+\\)/\\2 \\1/g",
+    "%s/\\d\\+/\\=submatch(0)*2/g", "%s/^/\\=line('.').': '/",
+    "%s/\\v(a|e|i)+/[&]/gi", "%s/x\\{3,}/X/g", "s/\\%V./#/g",
+    "set foldmethod=indent", "set foldmethod=syntax", "set foldmethod=marker",
+    "set foldmethod=manual", "set foldcolumn=4", "%foldclose", "%foldopen",
+    "set spell", "set nospell", "set list listchars=tab:>-,trail:~",
+    "undo 3", "undo 0", "earlier 1f", "later 1f", "undolist",
+    "set expandtab", "retab", "retab! 8", "set noexpandtab", "%retab!",
+    "windo set number", "bufdo normal! gg", "tabdo echo 1", "argdo normal! G",
+    "autocmd TextChanged * normal! zz", "autocmd InsertLeave * silent! %s/  / /g",
+    "autocmd! TextChanged", "autocmd! InsertLeave",
+    "let @a = 'dwjj'", "normal! 5@a", "5normal! x", "%normal! A;",
+    "g/^/m0", "sort u", "sort /\\d\\+/ n", "%!rev", "put =repeat('x', 300)",
+    "set virtualedit=all", "set virtualedit=", "set textwidth=20", "normal! gqap",
+    "set conceallevel=2", "set ft=c", "set ft=python", "set ft=markdown",
+    "tabnew big.txt", "new", "vnew", "only", "ball", "sball", "enew",
+  ].map((c) => `:${c}\r`),
+);
+
+// Visual block insert and append, and blockwise operations over ragged
+// lines.
+const block = keys(
+  "\x163jIx\x1b", "\x163j$Aend\x1b", "\x165jc##\x1b", "\x162jr*",
+  "\x163jd", "\x16G$y", "\x163jo", "\x163jO", "gv", "\x163j>",
+);
+
+// Completion menus in insert mode: keyword, line, file and omni.
+const completion = keys(
+  "a\x0e", "a\x0e\x0e\x10", "o\x18\x0c", "a\x18\x06", "a\x18\x0f",
+  "a\x18\x0e", "a\x18\x0b", "a\x18s", "\x19", "\x05",
+);
+
+// :terminal: open one, type into its shell, leave terminal mode with
+// Ctrl+\ Ctrl+N, and close it.
+const terminal = keys(
+  ":terminal\r", ":terminal echo hi\r", "i", "echo ünïcödé\r", "ls -la\r",
+  "exit\r", "\x1c\x0e", "\x17\x17", ":bd!\r",
+);
+
+// The command-line window, opened from the command line, and history.
+const cmdwin = keys("q:", "q/", "q?", ":\x06", "/\x06", "\r", ":q\r");
+
 export const drive = pauseAfterEscape(
   weighted([
     [25, motions],
@@ -84,6 +134,11 @@ export const drive = pauseAfterEscape(
     [6, visual],
     [5, windows],
     [8, ex],
+    [8, exDeep],
+    [4, block],
+    [4, completion],
+    [3, terminal],
+    [2, cmdwin],
     [12, typeFromSet(CharSets.ASCII_PRINTABLE)],
     [3, typeFromSet(CharSets.UNICODE_SAFE)],
     [10, keys("\x1b")],
