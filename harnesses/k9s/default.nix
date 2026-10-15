@@ -64,6 +64,9 @@ let
   '';
 
   launch = pkgs.writeShellScript "k9s-launch" ''
+    # Views that edit or open files, e.g. screen dumps, would otherwise
+    # launch the user's editor, which outlives the campaign.
+    export EDITOR=true VISUAL=true KUBE_EDITOR=true K9S_EDITOR=true
     exec ${k9s}/bin/k9s --readonly --logFile "$1/k9s.log" ${zoo.teeStderr}
   '';
 in
