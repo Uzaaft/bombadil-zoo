@@ -56,6 +56,10 @@ let
   # cleanly, so a run keeps fuzzing; any other exit ends the run, so the
   # spec still sees crashes.
   search = pkgs.writeShellScript "atuin-search-loop" ''
+    # Keys that arrive between two instances would otherwise be echoed by
+    # the terminal, and a multi-byte character split across reads shows up
+    # as U+FFFD, which noReplacementChars flagged.
+    ${pkgs.coreutils}/bin/stty -echo
     while ${atuin} search -i; do :; done
   '';
 
