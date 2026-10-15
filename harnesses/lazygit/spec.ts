@@ -14,12 +14,16 @@ import {
   pauseAfterEscape,
   resize,
   startsShowing,
+  typePrintableExcept,
 } from "../../lib/spec/common.ts";
 export {
   exitSuccess,
   noReplacementChars,
 } from "@antithesishq/bombadil/terminal/defaults/properties";
 export { neverStuckBlank } from "../../lib/spec/common.ts";
+
+// No quit keys, and random typing leaves out q and Q, which both quit: at
+// about 100 actions a second they ended most runs within a second or two.
 
 // Properties
 
@@ -95,9 +99,8 @@ export const drive = pauseAfterEscape(
     [6, rebase],
     [4, customPatch],
     [8, views],
-    [10, typeFromSet(CharSets.ASCII_PRINTABLE)],
+    [10, typePrintableExcept("qQ")],
     [3, typeFromSet(CharSets.UNICODE_SAFE)],
     [2, resize([20, 200], [5, 60])],
-    [1, keys("q")],
   ]),
 );

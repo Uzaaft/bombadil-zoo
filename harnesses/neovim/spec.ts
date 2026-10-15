@@ -143,6 +143,5 @@ export const drive = pauseAfterEscape(
     [3, typeFromSet(CharSets.UNICODE_SAFE)],
     [10, keys("\x1b")],
     [2, resize([20, 200], [5, 60])],
-    [1, keys(":q!\r", ":qa!\r", "ZZ", "ZQ")],
   ]),
 );
