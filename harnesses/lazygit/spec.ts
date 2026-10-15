@@ -29,23 +29,26 @@ export const noPanic = noCrashText(/panic: |fatal error: |goroutine \d+ \[/);
 const navigate = keys(
   "h", "j", "k", "l",
   "\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D",
-  "\x1b[5~", "\x1b[6~", "<", ">", ",", ".",
+  "\x1b[5~", "\x1b[6~", "<", ">", ",", ".", "[", "]",
   "\r", "\x1b", "\t", "\x1b[Z",
 );
 
 // Jump to the status, files, branches, commits and stash panels.
 const panels = keys("1", "2", "3", "4", "5");
 
-// Staging, committing, branching and history. They only touch the run's
-// copy of the seed repository.
+// Staging, committing, branching, history and remotes. They only touch the
+// run's copy of the seed repository and its remote.
 const gitOps = keys(
-  " ", "a", "c", "C", "A", "d", "D", "s", "S", "g",
-  "n", "M", "r", "R", "e", "o", "i", "f", "p", "P",
-  "z", "Z", "y", "t", "T", "F", "u",
+  " ", "a", "c", "C", "A", "d", "D", "s", "S", "g", "i",
+  "n", "M", "r", "R", "e", "o", "f", "F", "p", "P", "u",
+  "z", "Z", "y", "t", "T", "b", "B", "V", "w",
+  "\x0a", "\x0b", // Ctrl+J, Ctrl+K: move a commit down or up
 );
 
-// Menus, filters and views.
-const views = keys("?", "/", "x", "+", "_", "@", "w", "W", "m", "`", ":");
+// Menus, filters, views and the custom command prompt.
+const views = keys(
+  "?", "/", "x", "+", "_", "@", "W", "m", "`", ":", "\x12", // Ctrl+R: recent repos
+);
 
 export const drive = pauseAfterEscape(
   weighted([
