@@ -6,6 +6,9 @@ property-based terminal testing. Everything runs through Nix.
 | Harness | Target | Runs |
 | --- | --- | --- |
 | [`atuin`](harnesses/atuin) | [atuin](https://github.com/atuinsh/atuin)'s interactive search, over a seeded history database | in the Nix sandbox |
+| [`btop`](harnesses/btop) | [btop](https://github.com/aristocratos/btop), seeing only the sandbox's processes | in the Nix sandbox |
+| [`gitui`](harnesses/gitui) | [gitui](https://github.com/gitui-org/gitui), in a fresh copy of the shared git repository | in the Nix sandbox |
+| [`helix`](harnesses/helix) | [Helix](https://github.com/helix-editor/helix), on the shared source files | in the Nix sandbox |
 | [`k9s`](harnesses/k9s) | [k9s](https://github.com/derailed/k9s), against a throwaway kind cluster | on the host |
 | [`lazygit`](harnesses/lazygit) | [lazygit](https://github.com/jesseduffield/lazygit), in a fresh seed repository | in the Nix sandbox |
 | [`neovim`](harnesses/neovim) | [Neovim](https://github.com/neovim/neovim), `nvim --clean` on a seed of source and text files | in the Nix sandbox |
