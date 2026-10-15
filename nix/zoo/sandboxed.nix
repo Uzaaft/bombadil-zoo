@@ -44,6 +44,7 @@ let
     {
       seed ? "0",
       args ? [ ],
+      cpus ? "",
     }:
     let
       specTree = scripts.specTreeOf name;
@@ -52,7 +53,7 @@ let
       ${env}
       cp -r ${specTree} "$out/spec"
       status=0
-      ${bombadil.default}/bin/bombadil terminal fuzz \
+      ${scripts.pin cpus}${bombadil.default}/bin/bombadil terminal fuzz \
         --specification ${specIn name specTree} \
         --output-path "$out" \
         ${lib.escapeShellArgs args} \
@@ -67,6 +68,7 @@ let
     {
       trace,
       seed ? "0",
+      cpus ? "",
       specTree ? scripts.specTreeOf name,
     }:
     pkgs.runCommand "${name}-reproduce-${seed}" { nativeBuildInputs = inputs; } ''
@@ -74,7 +76,7 @@ let
       set -- ${trace} "$TMPDIR/trace.jsonl"
       ${scripts.unpackTrace}
       status=0
-      ${bombadil.default}/bin/bombadil terminal test \
+      ${scripts.pin cpus}${bombadil.default}/bin/bombadil terminal test \
         --specification ${specIn name specTree} \
         --reproduce "$TMPDIR/trace.jsonl" \
         --output-path "$out/run" \
@@ -112,8 +114,8 @@ let
   fuzz = app "fuzz" ''
     args="$(jq -nc '$ARGS.positional' --args -- "$@")"
     out="$(nix build --impure --no-link --print-out-paths -L \
-      --argstr seed "$ts" --argstr args "$args" \
-      --expr "{ seed, args }: $campaigns.run { inherit seed; args = builtins.fromJSON args; }")"
+      --argstr seed "$ts" --argstr args "$args" --argstr cpus "''${ZOO_CPUS:-}" \
+      --expr "{ seed, args, cpus }: $campaigns.run { inherit seed cpus; args = builtins.fromJSON args; }")"
   '';
 
   replay = app "reproduce" ''
@@ -131,8 +133,9 @@ let
     fi
     out="$(nix build --impure --no-link --print-out-paths -L \
       --argstr seed "$ts" --argstr trace "$trace" --argstr snapshot "$snapshot" \
-      --expr "{ seed, trace, snapshot }: $campaigns.reproduce ({
-        inherit seed;
+      --argstr cpus "''${ZOO_CPUS:-}" \
+      --expr "{ seed, trace, snapshot, cpus }: $campaigns.reproduce ({
+        inherit seed cpus;
         trace = builtins.path { path = trace; name = baseNameOf trace; };
       } // (if snapshot == \"\" then { } else {
         specTree = builtins.path { path = snapshot; name = \"spec\"; };

@@ -130,6 +130,22 @@ rec {
     [ -d "$snapshot" ] || snapshot=""
   '';
 
+  # bombadil always runs 8 workers, so the only way to cap the cores a
+  # campaign uses is CPU affinity, which the target processes inherit.
+  # `pin cpus` prefixes a command with taskset for a list like "0-3", or with
+  # nothing for "". The apps take the list from $ZOO_CPUS.
+  pin = cpus: lib.optionalString (cpus != "") "${pkgs.util-linux}/bin/taskset --cpu-list ${cpus} ";
+
+  # Shell: the same for the host runner, where $ZOO_CPUS is read at run time.
+  # Use as "''${pinned[@]}" before the command.
+  pinShell = ''
+    pinned=()
+    if [ -n "''${ZOO_CPUS:-}" ]; then
+      pinned=(${pkgs.util-linux}/bin/taskset --cpu-list "$ZOO_CPUS")
+      echo "pinned to CPUs $ZOO_CPUS" >&2
+    fi
+  '';
+
   app = drv: {
     type = "app";
     program = "${drv}/bin/${drv.name}";

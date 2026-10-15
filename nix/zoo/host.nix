@@ -49,8 +49,9 @@ let
       mkdir -p "$run/spec/lib" "$run/spec/harnesses/${name}"
       cp -r "$root/lib/spec" "$run/spec/lib/spec"
       cp "$root/harnesses/${name}/spec.ts" "$run/spec/harnesses/${name}/spec.ts"
+      ${scripts.pinShell}
       status=0
-      ${bombadil.default}/bin/bombadil terminal fuzz \
+      "''${pinned[@]}" ${bombadil.default}/bin/bombadil terminal fuzz \
         --specification "$run/spec/harnesses/${name}/spec.ts" \
         --output-path "$run" \
         "$@" \
@@ -79,8 +80,9 @@ let
       fi
       set -- "$trace" "$run/input.jsonl"
       ${scripts.unpackTrace}
+      ${scripts.pinShell}
       status=0
-      ${bombadil.default}/bin/bombadil terminal test \
+      "''${pinned[@]}" ${bombadil.default}/bin/bombadil terminal test \
         --specification "$spec" \
         --reproduce "$run/input.jsonl" \
         --output-path "$run/run" \

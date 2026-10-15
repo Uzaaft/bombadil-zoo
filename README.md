@@ -18,6 +18,10 @@ nix run .#reproduce-yazi -- .state/yazi/runs/<ts>/runs/17/trace.jsonl.zst
 nix flake check                                             # specs, builds, smoke campaigns
 ```
 
+bombadil always runs 8 workers. To run several campaigns at once, give each
+its own CPUs: `ZOO_CPUS=4-7 nix run .#fuzz-yazi` pins the campaign, and the
+target processes it starts, to CPUs 4 to 7.
+
 Every harness has `fuzz-<name>` and `reproduce-<name>`. Results go to
 `.state/<name>/runs/<timestamp>/`:
 
